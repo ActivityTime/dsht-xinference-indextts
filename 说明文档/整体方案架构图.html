@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DSH-Tavern 本地动漫角色 TTS 整体方案架构图</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; background: #f5f7fa; color: #1f2328; padding: 24px; line-height: 1.6; }
+  .wrap { max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 24px; margin-bottom: 4px; }
+  .sub { color: #57606a; font-size: 13px; margin-bottom: 20px; }
+  .card { background: #fff; border: 1px solid #d8dee4; border-radius: 10px; padding: 18px 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+  .card h2 { font-size: 16px; margin-bottom: 12px; color: #24292f; border-left: 4px solid #0969da; padding-left: 8px; }
+  .legend { display: flex; gap: 20px; font-size: 13px; margin: 10px 0 4px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .d-app { background: #24292f; }
+  .d-svc { background: #dafbe1; border: 1px solid #1a7f37; }
+  .d-model { background: #ddf4ff; border: 1px solid #0969da; }
+  .d-asset { background: #fff8c5; border: 1px solid #9a6700; }
+  .d-env { background: #f0f0f0; border: 1px solid #8b949e; }
+  .status { display: inline-flex; align-items: center; gap: 8px; background: #dafbe1; border: 1px solid #1a7f37; color: #116329; border-radius: 20px; padding: 4px 14px; font-size: 13px; font-weight: 600; }
+  .status .pulse { width: 9px; height: 9px; border-radius: 50%; background: #1a7f37; animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(1.25)} 100%{opacity:1;transform:scale(1)} }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { border: 1px solid #d8dee4; padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
+  tr:nth-child(even) td { background: #fafbfc; }
+  code { background: #eff1f3; border: 1px solid #e0e3e6; border-radius: 4px; padding: 1px 6px; font-family: Consolas, monospace; font-size: 12.5px; }
+  .note { font-size: 12px; color: #57606a; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>DSH-Tavern 本地动漫角色 TTS · 整体方案架构图</h1>
+  <div class="sub">Xinference 4.0.1 + IndexTTS-2.5（bf16）· 参考音频库驱动零样本克隆 · 整理 2026-10-24 · 说明文档/01-整体方案架构.md</div>
+
+  <div class="card">
+    <h2>运行状态</h2>
+    <span class="status"><span class="pulse"></span>服务运行中 · http://127.0.0.1:9997 · IndexTTS-2.5（bf16）已加载</span>
+    <div class="note">三大核心能力实测通过：零样本克隆 ✓ / 免逐字稿 ✓ / 情绪控制 ✓（日语四糸乃、开心情绪、中文牧濑红莉栖）。</div>
+  </div>
+
+  <div class="card">
+    <h2>分层架构与数据流</h2>
+    <div class="legend">
+      <span><span class="dot d-app"></span>消费层（DSH-Tavern）</span>
+      <span><span class="dot d-svc"></span>服务层（Xinference）</span>
+      <span><span class="dot d-model"></span>模型层（IndexTTS-2.5）</span>
+      <span><span class="dot d-asset"></span>资产层（参考音频库）</span>
+      <span><span class="dot d-env"></span>环境层（venv / torch）</span>
+    </div>
+    <svg viewBox="0 0 1160 640" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;">
+      <!-- 1 消费层 -->
+      <rect x="300" y="20" width="560" height="60" rx="10" fill="#24292f"/>
+      <text x="580" y="45" fill="#fff" font-size="16" font-weight="700" text-anchor="middle">DSH-Tavern</text>
+      <text x="580" y="66" fill="#c9d1d9" font-size="12" text-anchor="middle">Provider Endpoint → http://127.0.0.1:9997/v1</text>
+      <line x1="580" y1="80" x2="580" y2="110" stroke="#57606a" stroke-width="2"/>
+      <polygon points="571,106 580,118 589,106" fill="#57606a"/>
+      <text x="380" y="104" fill="#57606a" font-size="11">POST /v1/audio/speech (multipart)</text>
+      <text x="380" y="118" fill="#57606a" font-size="10.5">prompt_speech + text + kwargs(emo)</text>
+
+      <!-- 2 服务层 -->
+      <rect x="160" y="120" width="840" height="92" rx="12" fill="#dafbe1" stroke="#1a7f37" stroke-width="1.5"/>
+      <text x="580" y="142" fill="#116329" font-size="15" font-weight="700" text-anchor="middle">服务层 · Xinference 4.0.1</text>
+      <text x="580" y="162" fill="#1a7f37" font-size="12" text-anchor="middle">xinference-local --host 127.0.0.1 --port 9997 · 关鉴权 · 就绪超时180s · 探测 /status</text>
+      <text x="580" y="182" fill="#57606a" font-size="11" text-anchor="middle">/v1 OpenAI 兼容 API · 参数直通：lang / emo_vector / emo_text / emo_alpha / use_emo_text</text>
+      <text x="580" y="200" fill="#57606a" font-size="10.5" text-anchor="middle">由 launch_indextts.py（RESTfulClient, model_config={"use_bf16":true}）驱动</text>
+      <line x1="580" y1="212" x2="580" y2="240" stroke="#57606a" stroke-width="2"/>
+      <polygon points="571,236 580,248 589,236" fill="#57606a"/>
+
+      <!-- 3 模型层 -->
+      <rect x="160" y="250" width="840" height="140" rx="12" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/>
+      <text x="580" y="272" fill="#0550ae" font-size="15" font-weight="700" text-anchor="middle">模型层 · IndexTTS-2.5（bf16 加载，RTX 3080 10GB）</text>
+      <text x="580" y="292" fill="#0550ae" font-size="12" text-anchor="middle">全精度权重 ~6GB · 加载时 cast 成 bf16（无量化版）· 五语 ZH/EN/JA/ES/AR</text>
+      <!-- 内部管线 -->
+      <rect x="190" y="308" width="180" height="64" rx="8" fill="#fff" stroke="#0969da"/>
+      <text x="280" y="332" fill="#1f2328" font-size="12" font-weight="600" text-anchor="middle">T2S (自回归, 0.8B)</text>
+      <text x="280" y="352" fill="#57606a" font-size="10.5" text-anchor="middle">文本→G2P→语义token</text>
+      <text x="280" y="366" fill="#57606a" font-size="10.5" text-anchor="middle">音色-情绪解耦</text>
+      <line x1="370" y1="340" x2="410" y2="340" stroke="#0969da" stroke-width="2"/>
+      <polygon points="404,335 414,340 404,345" fill="#0969da"/>
+      <rect x="414" y="308" width="180" height="64" rx="8" fill="#fff" stroke="#0969da"/>
+      <text x="504" y="332" fill="#1f2328" font-size="12" font-weight="600" text-anchor="middle">S2M (Zipformer)</text>
+      <text x="504" y="352" fill="#57606a" font-size="10.5" text-anchor="middle">非自回归 语义→Mel</text>
+      <text x="504" y="366" fill="#57606a" font-size="10.5" text-anchor="middle">序列减半</text>
+      <line x1="594" y1="340" x2="634" y2="340" stroke="#0969da" stroke-width="2"/>
+      <polygon points="628,335 638,340 628,345" fill="#0969da"/>
+      <rect x="638" y="308" width="180" height="64" rx="8" fill="#fff" stroke="#0969da"/>
+      <text x="728" y="332" fill="#1f2328" font-size="12" font-weight="600" text-anchor="middle">BigVGAN2 声码器</text>
+      <text x="728" y="352" fill="#57606a" font-size="10.5" text-anchor="middle">Mel→22.05kHz 波形</text>
+      <text x="728" y="366" fill="#57606a" font-size="10.5" text-anchor="middle">输出 wav</text>
+      <!-- 返回 -->
+      <line x1="920" y1="390" x2="920" y2="420" stroke="#57606a" stroke-width="2"/>
+      <polygon points="911,416 920,428 929,416" fill="#57606a"/>
+      <text x="720" y="414" fill="#57606a" font-size="11">22.05kHz wav 返回 DSH-Tavern（speech-cache 缓存）</text>
+
+      <!-- 4 资产层 -->
+      <line x1="580" y1="430" x2="580" y2="452" stroke="#57606a" stroke-width="2"/>
+      <polygon points="571,448 580,460 589,448" fill="#57606a"/>
+      <text x="350" y="448" fill="#57606a" font-size="11">spk_audio_prompt（参考音频 3–10s，免逐字稿）</text>
+      <rect x="120" y="462" width="920" height="108" rx="12" fill="#fff8c5" stroke="#9a6700" stroke-width="1.5"/>
+      <text x="580" y="486" fill="#7a5a00" font-size="15" font-weight="700" text-anchor="middle">资产层 · 参考音频库  I:\SomeResources\VoiceClonePrompt-ForOmniVoice\prompt</text>
+      <text x="580" y="508" fill="#7a5a00" font-size="11.5" text-anchor="middle">datealive/ja 1047段(27角色) · datealive/npc 31 · genshin ja180/zh100 · kurisu ja40/zh30 · pilot</text>
+      <text x="580" y="526" fill="#7a5a00" font-size="11.5" text-anchor="middle">命名：语种_角色_编号_情绪_场景.wav → 按语气挑参考</text>
+      <text x="580" y="546" fill="#9a6700" font-size="10.5" text-anchor="middle">另有 _ab_indexTTS\clips（四糸乃/甘雨/胡桃/阿米娅）· raw\hf-kurisu-voice</text>
+
+      <!-- 5 环境层 -->
+      <rect x="120" y="586" width="920" height="40" rx="10" fill="#f0f0f0" stroke="#8b949e" stroke-width="1"/>
+      <text x="580" y="606" fill="#484f58" font-size="12" font-weight="600" text-anchor="middle">环境层 · K:\SomeApps\Xinference\venv（Python 3.13）· torch/torchaudio/torchvision 2.11.0+cu128 (CUDA12.8/sm_86)</text>
+      <text x="580" y="620" fill="#57606a" font-size="10.5" text-anchor="middle">HF_ENDPOINT=https://hf-mirror.com · HF_HUB_DISABLE_XET=1</text>
+
+      <!-- VRAM 仲裁侧栏 -->
+      <rect x="1040" y="120" width="104" height="506" rx="8" fill="#fff0e8" stroke="#d1242f" stroke-dasharray="5 4"/>
+      <text x="1092" y="144" fill="#d1242f" font-size="12" font-weight="700" text-anchor="middle">VRAM 仲裁</text>
+      <text x="1092" y="168" fill="#1f2328" font-size="10" text-anchor="middle">RTX 3080</text>
+      <text x="1092" y="184" fill="#1f2328" font-size="10" text-anchor="middle">10GB 总显存</text>
+      <text x="1092" y="206" fill="#1f2328" font-size="10" text-anchor="middle">IndexTTS</text>
+      <text x="1092" y="222" fill="#1f2328" font-size="10" text-anchor="middle">bf16 ~6GB</text>
+      <text x="1092" y="244" fill="#57606a" font-size="9.5" text-anchor="middle">若并跑 OmniVoice</text>
+      <text x="1092" y="260" fill="#57606a" font-size="9.5" text-anchor="middle">(~3-4GB) 超 10GB</text>
+      <text x="1092" y="282" fill="#d1242f" font-size="9.5" font-weight="600" text-anchor="middle">规则：</text>
+      <text x="1092" y="298" fill="#1f2328" font-size="9.5" text-anchor="middle">谁用谁加载</text>
+      <text x="1092" y="314" fill="#1f2328" font-size="9.5" text-anchor="middle">另一个卸载</text>
+      <text x="1092" y="330" fill="#57606a" font-size="9" text-anchor="middle">del + empty_cache</text>
+      <text x="1092" y="360" fill="#d1242f" font-size="9.5" font-weight="600" text-anchor="middle">磁盘提醒</text>
+      <text x="1092" y="376" fill="#1f2328" font-size="9.5" text-anchor="middle">缓存 ~22GB 占 K 盘</text>
+      <text x="1092" y="392" fill="#57606a" font-size="9" text-anchor="middle">建议挪 F/G 盘</text>
+      <text x="1092" y="470" fill="#9a6700" font-size="9.5" font-weight="600" text-anchor="middle">图例</text>
+      <text x="1092" y="486" fill="#57606a" font-size="9" text-anchor="middle">■ 消费 ▨ 服务</text>
+      <text x="1092" y="500" fill="#57606a" font-size="9" text-anchor="middle">▨ 模型 ▨ 资产 ▨ 环境</text>
+      <text x="1092" y="600" fill="#57606a" font-size="9">示意图</text>
+    </svg>
+  </div>
+
+  <div class="card">
+    <h2>核心能力实证（为什么这套成立）</h2>
+    <table>
+      <tr><th style="width:22%">能力</th><th>测试</th><th>结果</th></tr>
+      <tr><td>零样本克隆</td><td>四糸乃（约战 ja）参考 → 日语</td><td>✅ tts_test_yoshino.wav</td></tr>
+      <tr><td>情绪控制</td><td>同上 + emo_vector=[calm] / 开心</td><td>✅ tts_test_yoshino_happy.wav</td></tr>
+      <tr><td>中文克隆</td><td>牧濑红莉栖（kurisu zh）参考 → 中文</td><td>✅ tts_test_kurisu_zh.wav</td></tr>
+      <tr><td>免逐字稿</td><td>只传 prompt_speech + 文本，无参考转录</td><td>✅ 实测确认</td></tr>
+    </table>
+  </div>
+
+  <div class="note">说明：本图基于部署实测 + 问题记录 + 启动/加载脚本整理（2026-10-24）。分层、数据流、参数与实证均按真实运行状态绘制；「VRAM 仲裁」为原选型结论，当前单引擎运行未并行 OmniVoice。配套文档见 01/02/03，排障全记录见 K:\SomeApps\Xinference\问题记录\问题记录.md。</div>
+
+</div>
+</body>
+</html>

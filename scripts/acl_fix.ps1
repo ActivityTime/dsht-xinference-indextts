@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Continue'
-$log = "K:\SomeApps\Xinference\acl_fix.log"
+# 本脚本现位于 scripts\，日志写入上上级的 logs\（相对定位，禁止绝对路径）
+$log = Join-Path (Split-Path -Parent $PSScriptRoot) 'logs\acl_fix.log'
 "[===== FULL MSVC RUNTIME RESET $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') =====]" | Out-File -FilePath $log -Append -Encoding utf8
 
 $pats = @(

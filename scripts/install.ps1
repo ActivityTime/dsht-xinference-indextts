@@ -23,7 +23,8 @@ param(
   [string]$Index = 'https://download.pytorch.org/whl/cu128'
 )
 $ErrorActionPreference = 'Stop'
-$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+# 本脚本现位于 scripts\ 子目录，Xinference 根 = 上上级目录
+$Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $Venv = Join-Path $Root 'venv'
 $Down = Join-Path $Root 'downloads'
 

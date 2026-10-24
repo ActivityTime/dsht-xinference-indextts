@@ -12,16 +12,20 @@ __pycache__/
 # 官方 wheel 下载物（2.6GB，install.ps1 自动从 download.pytorch.org 重下）
 downloads/
 
-# 日志与运行时产物（本机特定，不入库）
+# 日志与运行时产物（本机特定，不入库）；backup 回滚点(.orig) 例外入库
 *.log
 server.pid
 server_out.txt
 server_run.err
 server_start.err
 server_start.log.err
+logs/*
+!logs/backup/
+logs/backup/*
+!logs/backup/*.orig*
 
-# 模型权重缓存（在 ~/.cache/huggingface，本目录无；防御性忽略）
-.cache/
+# 模型/数据/日志根（收拢到本目录，17.9GB，机器特定，不入库）
+.xinference/
 
 # 系统 / 编辑器
 Thumbs.db

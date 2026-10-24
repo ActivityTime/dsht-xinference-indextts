@@ -14,23 +14,24 @@
 
 $ErrorActionPreference = 'Continue'
 
-# ---- 可配置项 ----
-$venvDir    = 'K:\SomeApps\Xinference\venv'   # Xinference venv 路径
-$port       = 9997                            # 服务端口
-$webHost    = '127.0.0.1'                     # 监听地址(务必 127.0.0.1, 勿用 0.0.0.0)
-$modelName  = 'IndexTTS-2.5'                  # 模型名 (失败自动改试 IndexTTS2)
-$smallModelsDir = ''                          # 离线部署: 填 small_models 目录; 留空则联网下载
+# ---- 载入中央配置 (config.ps1) ----
+# 内部路径全部相对 config 定位（禁止绝对路径），外部引用在 config 明文列出。
+. (Join-Path $PSScriptRoot 'config.ps1')
+
+# ---- 可配置项（来自 config.ps1；如需改动请改 config.ps1）----
+$venvDir    = $Script:VenvDir           # Xinference venv（相对定位）
+$port       = $Script:Port              # 服务端口
+$webHost    = $Script:WebHost           # 监听地址(务必 127.0.0.1, 勿用 0.0.0.0)
+$modelName  = $Script:ModelName         # 模型名 (失败自动改试 IndexTTS2)
+$smallModelsDir = ''                    # 离线部署: 填 small_models 目录; 留空则联网下载
 
 $xin       = Join-Path $venvDir 'Scripts\xinference.exe'
 $xinLocal  = Join-Path $venvDir 'Scripts\xinference-local.exe'
-$endpoint  = 'http://127.0.0.1:' + $port
+$endpoint  = $Script:Endpoint
 
-# ---- 关键环境变量 ----
-$env:HF_ENDPOINT                 = 'https://hf-mirror.com'   # 国内 HF 镜像
-$env:HF_HUB_DISABLE_XET          = '1'                       # 关闭 Xet 避免下载卡死
-$env:XINFERENCE_HEALTH_CHECK_TIMEOUT = '180'                 # 子进程就绪等待(默认10s太短)
-$env:XINFERENCE_AUTH_ADVANCED    = '0'                       # 关闭鉴权, 本地直连
-$env:XINFERENCE_ENDPOINT         = $endpoint
+# ---- 关键环境变量（config.ps1 已注入 XINFERENCE_HOME/HF_ENDPOINT/HF_HUB_DISABLE_XET/
+#       XINFERENCE_HEALTH_CHECK_TIMEOUT/XINFERENCE_AUTH_ADVANCED/XINFERENCE_ENDPOINT/MODEL_NAME）
+#      此处仅追加每次运行需要的动态项 ----
 
 function Test-Health {
     # 4.x 用 /status 探测; /health 已返回 404
@@ -56,7 +57,7 @@ if (Test-Health) {
     }
     if (-not $ok) {
         Write-Host '[!] 服务启动超时。请检查: ' $xinLocal
-        Write-Host '     日志见 ~\.xinference\logs\xinference.log'
+        Write-Host ('     日志见 ' + (Join-Path $Script:XinferenceHome 'logs\xinference.log'))
         exit 1
     }
     Write-Host '[OK] 服务就绪: ' $endpoint
@@ -69,7 +70,7 @@ $env:MODEL_NAME = $modelName
 $env:USE_BF16   = 'true'
 if ($smallModelsDir -ne '') { $env:SMALL_MODELS_DIR = $smallModelsDir } else { Remove-Item Env:SMALL_MODELS_DIR -ErrorAction SilentlyContinue }
 Write-Host '[*] 加载模型 ' $modelName ' (bf16, 首次自动下载权重约 6GB, 请耐心等待) ...'
-& (Join-Path $venvDir 'Scripts\python.exe') (Join-Path $venvDir 'launch_indextts.py')
+& (Join-Path $venvDir 'Scripts\python.exe') $Script:LaunchScript
 
 Write-Host ''
 Write-Host '================ 启动完成 ================'

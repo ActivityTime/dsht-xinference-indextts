@@ -55,21 +55,22 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\start_xinference_indextts.ps1
 
 ```
 K:\SomeApps\Xinference\
-├─ install.ps1                      # 安装脚本（自写）
-├─ start_xinference_indextts.ps1    # 一键启动：服务 + 加载 IndexTTS-2.5（自写）
-├─ start_xinference_indextts.bat    # 启动脚本的 .bat 封装（自写）
-├─ launch_indextts.py               # 用 RESTfulClient 传 model_config 加载模型（自写）
-├─ acl_fix.ps1                      # 应急工具：修复 System32 MSVC 运行库 ACL 损坏（自写，仅特定机器需要）
+├─ start_xinference_indextts.ps1    # 一键启动：服务 + 加载 IndexTTS-2.5（外层唯一启动脚本）
+├─ start_xinference_indextts.bat    # 启动脚本的 .bat 封装
+├─ config.ps1                       # 中央配置（启动脚本依赖：内部路径相对定位、外部引用明文）
 ├─ README.md                        # 本文件
 ├─ .gitignore
-├─ 说明文档\
-│  ├─ 官方仓库.txt                  # 官方仓库/文档地址备忘
-│  └─ Xinference项目架构图.html      # 项目架构图
-├─ 问题记录\
-│  └─ 问题记录.md                   # 8 条排障记录（必读）
+├─ scripts\                         # 工具脚本（均无绝对路径，读环境变量 / 相对定位）
+│  ├─ install.ps1                   # 安装脚本
+│  ├─ acl_fix.ps1                   # 应急工具：修复 System32 MSVC 运行库 ACL
+│  ├─ launch_indextts.py            # 用 RESTfulClient 传 model_config 加载模型
+│  └─ tts_test.py                   # 合成测试客户端
+├─ logs\                            # 运行/安装日志（git 忽略）
+├─ 说明文档\                         # 使用文档（05-外部引用与配置.md 含外部依赖明文清单）
+├─ 问题记录\                         # 排障记录
 ├─ venv\                            # 虚拟环境（git 忽略，install.ps1 重建）
-├─ downloads\                       # 官方 cu128 wheel（git 忽略，脚本自动重下）
-└─ *.log / server.pid               # 运行日志（git 忽略）
+├─ .xinference\                     # 模型/数据/日志根（XINFERENCE_HOME，17.9GB，git 忽略）
+└─ downloads\                       # 官方 cu128 wheel（git 忽略，脚本自动重下）
 ```
 
 ## 关键配置（已确认可用）

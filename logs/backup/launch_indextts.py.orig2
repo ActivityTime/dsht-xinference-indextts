@@ -2,6 +2,8 @@
 """
 在已运行的 Xinference 服务上加载 IndexTTS-2.5 (或 IndexTTS2 备选)。
 - 通过 RESTfulClient 传 model_config={"use_bf16": ...} 以 bf16 加载, CLI 无法传此参数。
+- 幂等: 若目标模型已在运行 (list_models 命中 model_name), 直接复用, 不重复 launch,
+  避免累积多个实例占满显存/内存 (问题记录 #16)。
 - 环境变量:
   XINFERENCE_ENDPOINT   端点, 默认 http://127.0.0.1:9997
   MODEL_NAME            模型名, 默认 IndexTTS-2.5
@@ -22,6 +24,20 @@ small_dir = os.environ.get("SMALL_MODELS_DIR", "").strip()
 client = RESTfulClient(endpoint)
 
 
+def find_existing(name):
+    """返回已运行实例的 uid；无则返回 None。"""
+    try:
+        models = client.list_models()
+    except Exception:  # noqa: BLE001
+        return None
+    if not models:
+        return None
+    for uid, info in models.items():
+        if isinstance(info, dict) and info.get("model_name") == name:
+            return uid
+    return None
+
+
 def launch(name):
     config = {"use_bf16": use_bf16}
     if small_dir:
@@ -36,9 +52,19 @@ def launch(name):
         return False
 
 
-ok = launch(model_name)
-if not ok and model_name == "IndexTTS-2.5" and os.environ.get("ALLOW_FALLBACK", "0") == "1":
-    print("Fallback to IndexTTS2 ...")
-    ok = launch("IndexTTS2")
+existing = find_existing(model_name)
+if existing:
+    print(f"Model {model_name} already running as uid={existing}; reuse (skip launch)")
+    ok = True
+else:
+    ok = launch(model_name)
+    if not ok and model_name == "IndexTTS-2.5" and os.environ.get("ALLOW_FALLBACK", "0") == "1":
+        print("Fallback to IndexTTS2 ...")
+        ex2 = find_existing("IndexTTS2")
+        if ex2:
+            print(f"IndexTTS2 already running as uid={ex2}; reuse (skip launch)")
+            ok = True
+        else:
+            ok = launch("IndexTTS2")
 
 sys.exit(0 if ok else 1)

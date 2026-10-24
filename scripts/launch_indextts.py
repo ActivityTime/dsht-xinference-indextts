@@ -1,0 +1,63 @@
+# -*- coding: utf-8 -*-
+"""
+在已运行的 Xinference 服务上加载 IndexTTS-2.5 (或 IndexTTS2 备选)。
+- 通过 RESTfulClient 传 model_config={"use_bf16": ...} 以 bf16 加载, CLI 无法传此参数。
+- 幂等: 若目标模型已在运行 (list_models 命中 model_name), 直接复用, 不重复 launch,
+  避免累积多个实例占满显存/内存 (问题记录 #16)。
+- 环境变量:
+  XINFERENCE_ENDPOINT   端点, 默认 http://127.0.0.1:9997
+  MODEL_NAME            模型名, 默认 IndexTTS-2.5
+  USE_BF16              true/false, 默认 true
+  SMALL_MODELS_DIR      离线 small_models 目录, 可选
+  ALLOW_FALLBACK        1 时才在 IndexTTS-2.5 失败后回退 IndexTTS2(旧模型), 默认关
+"""
+import os
+import sys
+
+from xinference.client import RESTfulClient
+
+endpoint = os.environ.get("XINFERENCE_ENDPOINT", "http://127.0.0.1:9997")
+model_name = os.environ.get("MODEL_NAME", "IndexTTS-2.5")
+use_bf16 = os.environ.get("USE_BF16", "true").strip().lower() not in ("0", "false", "no", "off")
+small_dir = os.environ.get("SMALL_MODELS_DIR", "").strip()
+
+client = RESTfulClient(endpoint)
+
+
+def find_existing(name):
+    """返回已运行实例的 uid；无则返回 None。"""
+    try:
+        models = client.list_models()
+    except Exception:  # noqa: BLE001
+        return None
+    if not models:
+        return None
+    for uid, info in models.items():
+        if isinstance(info, dict) and info.get("model_name") == name:
+            return uid
+    return None
+
+
+def launch(name):
+    config = {"use_bf16": use_bf16}
+    if small_dir:
+        config["small_models_dir"] = small_dir
+    print(f"Launching {name} (use_bf16={use_bf16}) on {endpoint} ...")
+    try:
+        uid = client.launch_model(model_name=name, model_type="audio", model_config=config)
+        print(f"OK model_uid={uid}")
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL {name}: {e}")
+        return False
+
+
+existing = find_existing(model_name)
+if existing:
+    print(f"Model {model_name} already running as uid={existing}; reuse (skip launch)")
+    ok = True
+else:
+    # [removed 2026-10-24] IndexTTS2 legacy fallback removed; only IndexTTS-2.5.
+    ok = launch(model_name)
+
+sys.exit(0 if ok else 1)

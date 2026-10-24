@@ -1,0 +1,45 @@
+# =============================================================
+#  Xinference Central Config (config-driven, 2026-10-24)
+#  Rules:
+#   1) Internal paths are resolved RELATIVE to this file (NO absolute paths).
+#      Move the whole folder without editing any script.
+#   2) External dependencies are listed EXPLICITLY in $Script:ExternalDeps
+#      (runtime deps, cannot be packaged/moved).
+#  Chinese notes live in ..\说明文档\05-外部引用与配置.md (keep this file ASCII).
+#  Must sit in the same dir as start_xinference_indextts.ps1 and be dot-sourced.
+# =============================================================
+
+# ---- Base dir: directory of this config file (= Xinference root) ----
+$Script:BaseDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# ---- Internal paths (relative to BaseDir, NO absolute paths) ----
+$Script:VenvDir        = Join-Path $Script:BaseDir 'venv'
+$Script:XinferenceHome = Join-Path $Script:BaseDir '.xinference'
+$Script:LaunchScript   = Join-Path $Script:BaseDir 'scripts\launch_indextts.py'  # 加载脚本(读环境变量,无硬编码)
+$Script:TestScript     = Join-Path $Script:BaseDir 'scripts\tts_test.py'          # 合成测试客户端(读环境变量,无硬编码)
+
+# ---- Service params ----
+$Script:Port      = 9997
+$Script:WebHost   = '127.0.0.1'          # MUST be 127.0.0.1, never 0.0.0.0
+$Script:ModelName = 'IndexTTS-2.5'
+$Script:Endpoint  = "http://$($Script:WebHost):$($Script:Port)"
+
+# ---- Env vars injected into the process (shared by server/launch/tts_test) ----
+$env:XINFERENCE_HOME                 = $Script:XinferenceHome
+$env:HF_ENDPOINT                     = 'https://hf-mirror.com'
+$env:HF_HUB_DISABLE_XET              = '1'
+$env:XINFERENCE_HEALTH_CHECK_TIMEOUT = '180'
+$env:XINFERENCE_AUTH_ADVANCED        = '0'
+$env:XINFERENCE_ENDPOINT             = $Script:Endpoint
+$env:MODEL_NAME                      = $Script:ModelName
+
+# ---- External dependency list (explicit; runtime or usage-time resources) ----
+# Chinese full notes: ..\说明文档\05-外部引用与配置.md
+# Only User-level XINFERENCE_HOME may be an absolute path (Xinference requires it,
+# points to data root); scripts always recompute from BaseDir above.
+$Script:ExternalDeps = [ordered]@{
+  'BasePython313 (venv base_prefix, runtime)' = 'K:\Users\ACTIM.DESKTOP-BPAEDTM\AppData\Local\Programs\Python\Python313'
+  'MSVC_OpenMP_runtime (C:\Windows\System32)' = 'vcruntime140*.dll, msvcp140*.dll, concrt140.dll, vcomp140.dll, msvcr140.dll'
+  'NVIDIA_CUDA_driver (GPU, runtime)' = 'RTX 3080 (sm_86); torch 2.11.0+cu128; NVIDIA driver installed'
+  'ReferenceAudioLibrary (usage-time, do NOT move)' = 'I:\SomeResources\VoiceClonePrompt-ForOmniVoice'
+}

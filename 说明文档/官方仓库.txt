@@ -1,11 +1,12 @@
 官方 git 有两个：
 
 **Xinference（底座服务）**
-- 官方仓库：`[https://github.com/xorbitsai/inference](https://github.com/xorbitsai/inference)`
-- 文档：`[https://inference.readthedocs.io/](https://inference.readthedocs.io/)`（可查 IndexTTS 部署说明）
+- 官方仓库：https://github.com/xorbitsai/inference
+- 文档：https://inference.readthedocs.io/（可查 IndexTTS 部署说明）
 
-**IndexTTS-2.5（Xinference 上跑的角色语音模型，IndexTeam / bilibili）**
-- 官方仓库：`[https://github.com/index-tts/index-tts](https://github.com/index-tts/index-tts)`
-- HuggingFace 权重：`IndexTeam/IndexTTS-2.5`；论文 arXiv:2601.03888
+**IndexTTS-2.5（Xinference 上跑的动漫语音模型，IndexTeam / bilibili）**
+- 官方仓库：https://github.com/index-tts/index-tts
+- HuggingFace 权重：IndexTeam/IndexTTS-2.5
+- 论文：arXiv:2601.03888
 
-Xinference，主仓库是 `xorbitsai/inference`
+主仓库是 xorbitsai/inference
