@@ -94,6 +94,7 @@ textarea{resize:vertical;min-height:6rem}
 .refitem .size,.histitem .meta{font-size:.75rem;color:hsl(var(--muted-foreground));flex-shrink:0}
 .refitem audio,.histitem audio{height:2rem;max-width:11rem}
 #statusbar{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
+.advgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(21rem,1fr));gap:.5rem .75rem;align-items:start}
 .audio-out{width:100%;margin-top:.5rem}
 .audio-mini{height:2rem;max-width:13rem}
 .log{background:hsl(var(--muted));border-radius:calc(var(--radius) - 2px);padding:.75rem;font-family:ui-monospace,Consolas,monospace;font-size:.75rem;white-space:pre-wrap;word-break:break-all;max-height:10rem;overflow-y:auto;color:hsl(var(--muted-foreground))}
@@ -336,6 +337,7 @@ textarea{resize:vertical;min-height:6rem}
             <a class="btn btn-secondary" id="tts-dl" download>下载</a>
           </div>
         </div>
+        <div class="log" id="kwargs-preview" style="margin-top:.75rem;display:none"></div>
         <div class="log" id="tts-log" style="margin-top:.75rem;display:none"></div>
       </div>
     </section>
@@ -728,6 +730,7 @@ const ADV_FIELDS = [
    "默认开（官方）：数字/符号转读法。仅当正文已高度规范化才关。依据：官方 infer 参数 text_normalization=True。"],
 ];
 function renderAdvanced(prefix) {
+  $(prefix).classList.add("advgrid");
   $(prefix).innerHTML = ADV_FIELDS.map(([k, label, type, ph, hint]) =>
     type === "checkbox" || type === "checkbox-on"
       ? `<label class="f" style="flex-direction:row;align-items:center;gap:.375rem;min-width:14rem" title="${esc(hint)}">
@@ -1028,6 +1031,7 @@ function renderPageMode() {
   $("adapter-box").style.display = adapter ? "" : "none";
   $("btn-save-default").style.display = adapter ? "none" : "";
   $("btn-save-adapter").style.display = adapter ? "" : "none";
+  $("tts-fmt").style.display = adapter ? "none" : "";
   $("mode-hint").textContent = adapter
     ? "填 API 请求字段；服务端适配层剥指令壳、查情绪映射、按分组联动成员。"
     : "手动选参考音频与情感，所见即所得。";
@@ -1109,6 +1113,8 @@ async function doTtsDirect() {
     $("pill-cache").style.display = "";
     setPill("pill-cache", "cache-text", cached ? "ok" : "warn", cached ? "缓存命中" : "新合成（已入缓存）");
     log.textContent = `${cached ? "CACHE HIT" : "OK"} ${sec}s, ${fmtBytes(blob.size)}, mode=${mode}`;
+    const pv = $("kwargs-preview"); pv.style.display = "";
+    pv.textContent = "最终 kwargs：" + JSON.stringify(kwargs);
   } catch (e) {
     log.textContent = "请求失败：" + e;
     toast("合成请求失败（控制台服务未启动？）", true);
@@ -1194,7 +1200,9 @@ async function doAdapter() {
     $("pill-cache").style.display = "";
     setPill("pill-cache", "cache-text", cached ? "ok" : "warn", cached ? "缓存命中" : "新合成（已入缓存）");
     $("ad-report").style.display = "";
-    $("ad-report").textContent = JSON.stringify(report, null, 1);
+    $("ad-report").textContent = JSON.stringify(report, null, 1)  + "\n\n最终 kwargs：" + kwargsFinal;
+    const pv = $("kwargs-preview"); pv.style.display = "";
+    pv.textContent = "最终 kwargs：" + kwargsFinal;
     log.textContent = `ADAPTER ${cached ? "CACHE HIT" : "OK"} ${sec}s, ${fmtBytes(blob.size)}`;
   } catch (e) {
     log.textContent = "请求失败：" + e;
