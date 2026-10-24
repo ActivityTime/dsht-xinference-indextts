@@ -973,6 +973,29 @@ async function saveDefaults() {
     headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
   toast("API 默认参数已保存");
 }
+/* ── OpenAI 适配默认行为：模式说明（与 server.py api_tts_adapter 实现同步） ── */
+const ADAPTER_MODE_DESCS = {
+  text_emotion:
+    "voice 定音色：逗号（中英）分段，首个含分组名的段确定分组（该段整段消费，不再匹配标签），"
+    + "其余段与分组内成员情绪标签做双向子串匹配——按成员顺序（=标签优先级，音色分组页可调）遍历，"
+    + "首个命中的标签确认音色，未命中用默认成员；"
+    + "instructions 整段作为文字情感描述（emo_text）；情绪映射表在该模式不参与。",
+  guide_audio:
+    "voice 定分组与情感词：逗号分段，命中分组名的段定分组（默认成员做音色），"
+    + "其余段与 instructions（剥「用X的语气」壳）经情绪映射表提供情绪标签；"
+    + "标签命中组内成员 → 该成员音频作为引导音频（emo_prompt_speech_b64），"
+    + "无组内命中 → 映射规则 audio 引用 → 向量/文字 回退。",
+  group_switch:
+    "voice 定分组；instructions/voice 情绪标签命中组内成员 → 切换到该成员音色，"
+    + "情感跟随该成员参考音频（不注入）；组内无命中但映射规则有向量/文字动作时仍注入。",
+};
+function renderModeDesc() {
+  const v = $("def-mode").value;
+  const box = $("mode-desc");
+  box.style.display = "";
+  box.textContent = ADAPTER_MODE_DESCS[v] ?? "";
+}
+
 /* ── 语音合成页默认填写状态（独立于 API 配置页的默认参数；含整页全部选项与输入） ── */
 function collectTtsForm() {
   return {
