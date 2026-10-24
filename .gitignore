@@ -28,6 +28,12 @@ logs/backup/*
 # 模型/数据/日志根（收拢到本目录，17.9GB，机器特定，不入库）
 .xinference/
 
+# Web 控制台运行时产物（请求归档 / 合成缓存 / 控制台日志；#33）
+console/history/
+console/cache/
+console/console.log*
+console/library.json
+
 # 系统 / 编辑器
 Thumbs.db
 .DS_Store

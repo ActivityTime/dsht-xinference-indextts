@@ -26,7 +26,8 @@ $Script:Endpoint  = "http://$($Script:WebHost):$($Script:Port)"
 
 # ---- Web 控制台（独立于内置 webui；内置 webui 已拆除，见 问题记录 #32）----
 $Script:ConsolePort    = 9998
-$Script:ConsoleScript  = Join-Path $Script:BaseDir 'scripts\console_server.py'
+$Script:ConsoleScript  = Join-Path $Script:BaseDir 'console\server.py'
+$Script:ConsoleDir     = Join-Path $Script:BaseDir 'console'   # 自包含：页面/后端/库配置/归档/缓存
 $Script:ConsoleUrl     = "http://$($Script:WebHost):$($Script:ConsolePort)"
 
 # ---- Env vars injected into the process (shared by server/launch/tts_test) ----
