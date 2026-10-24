@@ -119,6 +119,7 @@ class Indextts2:
                 device=self._device,
                 use_deepspeed=use_deepspeed,
                 use_qwen_emo=self._kwargs.get("use_qwen_emo", False),
+                qwen_device=self._kwargs.get("qwen_device", "auto"),
             )
             return
 

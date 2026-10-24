@@ -43,11 +43,13 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\start_xinference_indextts.ps1
 
 ## 使用
 
-- Web UI：<http://127.0.0.1:9997>
+- Web 控制台（独立，推荐）：<http://127.0.0.1:9998>（随启动脚本自动拉起；状态总览 / 合成测试台 / 参考音频库）
 - OpenAI 兼容端点：<http://127.0.0.1:9997/v1>
 - DSH-Tavern Provider Endpoint → `http://127.0.0.1:9997/v1`
 
-启动脚本会：健康探测（`/status`）→ 未运行则启动 `xinference-local`（等待最多 4 分钟）→ 加载 IndexTTS-2.5（bf16）。**IndexTTS2（旧版）回退已移除**（见 问题记录 #19），只支持 IndexTTS-2.5。
+> 内置 WebUI 已拆除（与 IndexTTS-2.5 运行无关，问题记录 #32）：`http://127.0.0.1:9997/` 返回 JSON 404，服务纯 API 化。
+
+启动脚本会：恢复自维护包（指纹一致跳过）→ 健康探测（`/status`）→ 未运行则启动 `xinference-local`（等待最多 4 分钟）→ 加载 IndexTTS-2.5（bf16；功能开关见 `config.ps1` 的 `USE_QWEN_EMO`/`QWEN_DEVICE`——文字情感默认关闭、首次请求惰性唤醒，功能不丢）→ 拉起 Web 控制台（9998）。**IndexTTS2（旧版）回退已移除**（见 问题记录 #19），只支持 IndexTTS-2.5。
 
 ---
 
@@ -75,16 +77,18 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\start_xinference_indextts.ps1
 
 ```
 K:\SomeApps\Xinference\                  # 自维护区（git → GitHub: ActivityTime/dsht-xinference-indextts）
-├─ start_xinference_indextts.ps1/.bat    # 一键启动（9999 互斥锁 + 拉起守护监控）
+├─ start_xinference_indextts.ps1/.bat    # 一键启动（9999 互斥锁 + 拉起守护监控 + Web 控制台）
 ├─ rebuild_downloads.ps1                 # 一键重建下载区（权重 HF + torch cu128 官方索引 + pip 依赖）
-├─ config.ps1                            # 中央配置（内部路径相对定位、外部依赖明文）
+├─ config.ps1                            # 中央配置（内部路径相对定位、外部依赖明文、功能开关）
+├─ console\admin.html                    # 独立 Web 控制台（单文件、无 CDN、shadcn 主题对齐旧内置 WebUI）
 ├─ README.md  .gitignore
 ├─ maintained\                           # 自维护资产（git 跟踪，无外部源）
-│  ├─ xinference-package\                # 自维护 Xinference 包（禁止下载，23MB，Sync-Maintained 整包恢复；
-│  │                                     #   thirdparty 已完全精简：#28 仅留 indextts+audiotools，2.3MB）
+│  ├─ xinference-package\                # 自维护 Xinference 包（禁止下载，Sync-Maintained 整包恢复；
+│  │                                     #   thirdparty 已完全精简：#28 仅留 indextts+audiotools，2.3MB；
+│  │                                     #   内置 WebUI 已拆除：#32 移除 ui/web/dist，服务纯 API 化）
 │  ├─ requirements-venv-main.txt         # 主 venv 依赖清单（94 行，重建依据；不含 xinference）
 │  └─ requirements-venv-v4.txt           # v4 模型环境依赖清单（151 行，重建依据）
-├─ scripts\                              # launch_indextts.py / tts_test.py / monitor_indextts.py / install.ps1 / acl_fix.ps1
+├─ scripts\                              # launch_indextts.py / tts_test.py / monitor_indextts.py / console_server.py / install.ps1 / acl_fix.ps1
 ├─ 说明文档\  问题记录\  logs\backup\     # 文档与回滚点（git 跟踪）
 ├─ venv\            → junction → downloads\venv-main      # 主 venv（可下载区）
 ├─ .xinference\     → cache/v2/IndexTTS-2_5 & virtualenv/v4 为 junction → downloads

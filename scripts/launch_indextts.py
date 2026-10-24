@@ -20,6 +20,12 @@ endpoint = os.environ.get("XINFERENCE_ENDPOINT", "http://127.0.0.1:9997")
 model_name = os.environ.get("MODEL_NAME", "IndexTTS-2.5")
 use_bf16 = os.environ.get("USE_BF16", "true").strip().lower() not in ("0", "false", "no", "off")
 small_dir = os.environ.get("SMALL_MODELS_DIR", "").strip()
+# 功能开关（config.ps1 注入）：
+#   USE_QWEN_EMO=true  启动即加载 QwenEmotion（文字情感 use_emo_text；多占 1.2-2.5G 显存）
+#   USE_QWEN_EMO=false 默认：启动不加载；首个 use_emo_text 请求会惰性唤醒（功能不丢）
+#   QWEN_DEVICE=auto|cpu  cpu 把 QwenEmotion 钉在内存（省显存，短文本多 1-3s 延迟）
+use_qwen_emo = os.environ.get("USE_QWEN_EMO", "false").strip().lower() in ("1", "true", "yes", "on")
+qwen_device = os.environ.get("QWEN_DEVICE", "auto").strip().lower() or "auto"
 
 client = RESTfulClient(endpoint)
 
@@ -39,10 +45,11 @@ def find_existing(name):
 
 
 def launch(name):
-    config = {"use_bf16": use_bf16}
+    config = {"use_bf16": use_bf16, "use_qwen_emo": use_qwen_emo, "qwen_device": qwen_device}
     if small_dir:
         config["small_models_dir"] = small_dir
-    print(f"Launching {name} (use_bf16={use_bf16}) on {endpoint} ...")
+    print(f"Launching {name} (use_bf16={use_bf16}, use_qwen_emo={use_qwen_emo}, "
+          f"qwen_device={qwen_device}) on {endpoint} ...")
     try:
         uid = client.launch_model(model_name=name, model_type="audio", model_config=config)
         print(f"OK model_uid={uid}")

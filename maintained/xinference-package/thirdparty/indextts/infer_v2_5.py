@@ -1,4 +1,5 @@
 import os
+import threading
 from subprocess import CalledProcessError
 
 os.environ['HF_HUB_CACHE'] = './checkpoints/hf_cache'
@@ -75,7 +76,8 @@ def apply_pronunciation_annotations(text: str) -> str:
 class IndexTTS2:
     def __init__(
             self, cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_bf16=False, device=None,
-            use_cuda_kernel=None,use_deepspeed=False, use_accel=False, use_torch_compile=False, use_qwen_emo=False
+            use_cuda_kernel=None,use_deepspeed=False, use_accel=False, use_torch_compile=False, use_qwen_emo=False,
+            qwen_device="auto"
     ):
         """
         Args:
@@ -87,9 +89,12 @@ class IndexTTS2:
             use_deepspeed (bool): whether to use DeepSpeed or not.
             use_accel (bool): whether to use acceleration engine for GPT2 or not.
             use_torch_compile (bool): whether to use torch.compile for optimization or not.
-            use_qwen_emo (bool): if True, load the QwenEmotion text-to-emotion model.
-                Required for ``infer(..., use_emo_text=True)``. Attempting to use emotion-text
-                guidance when this is disabled will raise a RuntimeError.
+            use_qwen_emo (bool): if True, load the QwenEmotion text-to-emotion model at init.
+                Required for ``infer(..., use_emo_text=True)``. When False (default) the model
+                is NOT loaded at init (saves ~1.2-2.5G VRAM + load time); the first
+                ``use_emo_text=True`` request lazily loads it once via :meth:`ensure_qwen_emo`.
+            qwen_device (str): where QwenEmotion lives: "auto" (accelerate decides, GPU when
+                available) or "cpu" (keeps VRAM free; short-text inference adds ~1-3s latency).
         """
         if device is not None:
             self.device = device
@@ -130,10 +135,14 @@ class IndexTTS2:
                 print(f">> Low-VRAM mode enabled ({total_vram_gb:.1f} GB < 10 GB), long text will be split into chunks")
 
         if use_qwen_emo:
-            self.qwen_emo = QwenEmotion(os.path.join(self.model_dir, self.cfg.qwen_emo_path))
+            self.qwen_device_map = "auto" if qwen_device in (None, "auto") else qwen_device
+            self.qwen_emo = QwenEmotion(os.path.join(self.model_dir, self.cfg.qwen_emo_path),
+                                        device_map=self.qwen_device_map)
         else:
+            self.qwen_device_map = "auto" if qwen_device in (None, "auto") else qwen_device
             self.qwen_emo = None
-            print(">> QwenEmotion not loaded (use_qwen_emo=False)")
+            self._qwen_emo_lock = threading.Lock()
+            print(">> QwenEmotion not loaded (use_qwen_emo=False; will lazy-load on first use_emo_text request)")
 
         self.gpt = UnifiedVoice(**self.cfg.gpt, use_accel=self.use_accel, spk_cond_mode="campplus")
         self.gpt_path = os.path.join(self.model_dir, self.cfg.gpt_checkpoint)
@@ -279,6 +288,23 @@ class IndexTTS2:
         # 进度引用显示（可选）
         self.gr_progress = None
         self.model_version = self.cfg.version if hasattr(self.cfg, "version") else None
+
+    def ensure_qwen_emo(self):
+        """Lazily load QwenEmotion on the first ``use_emo_text`` request.
+
+        Feature switch semantics: init with ``use_qwen_emo=False`` skips the
+        1.2G load (VRAM + startup time); the first emotion-text request wakes
+        it once and it stays resident afterwards. Double-checked locking keeps
+        concurrent first requests from double-loading."""
+        if self.qwen_emo is None:
+            with self._qwen_emo_lock:
+                if self.qwen_emo is None:
+                    qwen_dir = os.path.join(self.model_dir, self.cfg.qwen_emo_path)
+                    print(f">> QwenEmotion lazy-loading from {qwen_dir} "
+                          f"(device_map={self.qwen_device_map}; first use_emo_text request) ...")
+                    self.qwen_emo = QwenEmotion(qwen_dir, device_map=self.qwen_device_map)
+                    print(">> QwenEmotion lazy-loaded; it stays resident for subsequent requests")
+        return self.qwen_emo
 
     @torch.no_grad()
     def get_emb(self, input_features, attention_mask):
@@ -589,11 +615,9 @@ class IndexTTS2:
 
         if use_emo_text:
             # automatically generate emotion vectors from text prompt
-            if self.qwen_emo is None:
-                raise RuntimeError(
-                    "use_emo_text=True requires QwenEmotion, but it was not loaded at init "
-                    "(use_qwen_emo=False). Re-construct IndexTTS2 with use_qwen_emo=True."
-                )
+            # (lazily loads QwenEmotion on first use when it was off at init;
+            #  weights stay on disk — feature switch only defers the load)
+            self.ensure_qwen_emo()
             if emo_text is None:
                 emo_text = text  # use main text prompt
             emo_dict = self.qwen_emo.inference(emo_text)
@@ -910,13 +934,13 @@ def find_most_similar_cosine(query_vector, matrix):
     return most_similar_index
 
 class QwenEmotion:
-    def __init__(self, model_dir):
+    def __init__(self, model_dir, device_map="auto"):
         self.model_dir = model_dir
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_dir)
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_dir,
             torch_dtype="float16",  # "auto"
-            device_map="auto"
+            device_map=device_map  # "auto" = accelerate decides (GPU when available); "cpu" keeps VRAM free
         )
         self.prompt = "文本情感分类"
         self.cn_key_to_en = {

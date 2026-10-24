@@ -24,6 +24,11 @@ $Script:WebHost   = '127.0.0.1'          # MUST be 127.0.0.1, never 0.0.0.0
 $Script:ModelName = 'IndexTTS-2.5'
 $Script:Endpoint  = "http://$($Script:WebHost):$($Script:Port)"
 
+# ---- Web 控制台（独立于内置 webui；内置 webui 已拆除，见 问题记录 #32）----
+$Script:ConsolePort    = 9998
+$Script:ConsoleScript  = Join-Path $Script:BaseDir 'scripts\console_server.py'
+$Script:ConsoleUrl     = "http://$($Script:WebHost):$($Script:ConsolePort)"
+
 # ---- Env vars injected into the process (shared by server/launch/tts_test) ----
 $env:XINFERENCE_HOME                 = $Script:XinferenceHome
 $env:HF_ENDPOINT                     = 'https://hf-mirror.com'
@@ -34,6 +39,15 @@ $env:XINFERENCE_HEALTH_CHECK_TIMEOUT = '180'
 $env:XINFERENCE_AUTH_ADVANCED        = '0'
 $env:XINFERENCE_ENDPOINT             = $Script:Endpoint
 $env:MODEL_NAME                      = $Script:ModelName
+
+# ---- IndexTTS-2.5 功能开关（详见 说明文档\07-IndexTTS-2.5功能开关与动态加载方案.md）----
+# USE_QWEN_EMO: false=启动不加载 QwenEmotion(文字情感 use_emo_text 专用, 1.2G 权重),
+#               首个文字情感请求惰性唤醒(功能不丢, 仅该次请求慢几秒); true=启动即加载。
+# QWEN_DEVICE : auto=跟随 accelerate(有 GPU 上 GPU); cpu=钉在内存, 省显存(短文本 +1~3s)。
+$env:USE_QWEN_EMO                    = 'false'
+$env:QWEN_DEVICE                     = 'auto'
+$env:CONSOLE_PORT                    = $Script:ConsolePort
+$env:REF_AUDIO_LIB                   = 'I:\SomeResources\VoiceClonePrompt-ForOmniVoice'  # 参考音频库（只读使用）
 
 # ---- External dependency list (explicit; runtime or usage-time resources) ----
 # Chinese full notes: ..\说明文档\05-外部引用与配置.md

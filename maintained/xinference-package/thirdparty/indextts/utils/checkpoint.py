@@ -20,7 +20,13 @@ import yaml
 
 
 def load_checkpoint(model: torch.nn.Module, model_pth: str) -> dict:
-    checkpoint = torch.load(model_pth, map_location='cpu')
+    # mmap: gpt.pth (3.1G) no longer fully materializes in RAM at load — lazily
+    # mapped from disk instead (half the load-time memory peak, faster start).
+    # Legacy (non-zip) checkpoints fall back to the plain load path.
+    try:
+        checkpoint = torch.load(model_pth, map_location='cpu', mmap=True)
+    except (RuntimeError, ValueError):
+        checkpoint = torch.load(model_pth, map_location='cpu')
     checkpoint = checkpoint['model'] if 'model' in checkpoint else checkpoint
     missing, unexpected = model.load_state_dict(checkpoint, strict=False)
     if missing:
