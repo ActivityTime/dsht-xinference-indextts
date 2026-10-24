@@ -83,7 +83,7 @@ K:\SomeApps\Xinference\                  # 自维护区（git → GitHub: Activi
 ├─ rebuild_downloads.ps1                 # 一键重建下载区（权重 HF + torch cu128 官方索引 + pip 依赖）
 ├─ config.ps1                            # 中央配置（内部路径相对定位、外部依赖明文、功能开关）
 ├─ console\                              # 独立 Web 控制台（自包含；#32/#33）
-│  ├─ admin.html                         #   页面（单文件、无 CDN、shadcn 主题对齐旧内置 WebUI）
+│  ├─ admin.html                         #   页面（状态/合成/音色库/情绪映射/音色分组/API配置/历史）
 │  ├─ server.py                          #   后端（9998；代理 9997 + 归档 + 缓存 + 多根音色库 + 日志）
 │  ├─ library.json                       #   音色库根配置（多根，页面可编辑；git 忽略）
 │  ├─ history\  cache\  console.log      #   请求归档 / 同参数缓存 / 日志（运行时生成，git 忽略）

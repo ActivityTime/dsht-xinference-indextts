@@ -37,7 +37,6 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.8125rem;background:h
 ::-webkit-scrollbar{width:6px;height:6px}
 ::-webkit-scrollbar-thumb{background:hsl(var(--muted-foreground)/.5);border-radius:9999px}
 
-/* ── 布局：Xinference WebUI 同款侧边栏 ── */
 .shell{display:flex;height:100vh;overflow:hidden}
 .sidebar{width:15rem;flex-shrink:0;display:flex;flex-direction:column;background:hsl(var(--card));border-right:1px solid hsl(var(--border))}
 .sidebar-head{display:flex;align-items:center;gap:.5rem;padding:1rem 1.5rem;margin:.5rem 0 1rem}
@@ -56,7 +55,6 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.8125rem;background:h
 h2.page-title{font-size:1.5rem;font-weight:700;margin:0 0 .25rem}
 p.page-sub{color:hsl(var(--muted-foreground));margin:0 0 1.5rem}
 
-/* ── 卡片 / 表单 / 按钮（shadcn 语义） ── */
 .card{background:hsl(var(--card));color:hsl(var(--card-foreground));border:1px solid hsl(var(--border));border-radius:var(--radius);padding:1rem;margin-bottom:1rem}
 .card h3{font-weight:600;margin:0 0 .75rem;font-size:1rem}
 .row{display:flex;gap:.75rem;flex-wrap:wrap;align-items:center}
@@ -76,6 +74,7 @@ textarea{resize:vertical;min-height:6rem}
 .btn-secondary:hover{background:hsl(var(--accent))}
 .btn-danger{background:hsl(var(--destructive)/.1);color:hsl(var(--destructive))}
 .btn-danger:hover{background:hsl(var(--destructive)/.2)}
+.btn-sm{height:1.75rem;padding:0 .5rem;font-size:.75rem}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .pill{display:inline-flex;align-items:center;gap:.375rem;padding:.125rem .625rem;border-radius:9999px;font-size:.75rem;font-weight:500;border:1px solid hsl(var(--border));color:hsl(var(--muted-foreground))}
 .pill .dot{width:.5rem;height:.5rem;border-radius:9999px;background:hsl(var(--muted-foreground))}
@@ -89,22 +88,23 @@ textarea{resize:vertical;min-height:6rem}
 .refgroup{padding:.5rem .75rem;border-bottom:1px solid hsl(var(--border)/.6)}
 .refgroup:last-child{border-bottom:0}
 .refgroup .gname{font-size:.75rem;font-weight:600;color:hsl(var(--muted-foreground));text-transform:uppercase;letter-spacing:.05em;margin-bottom:.25rem}
-.refitem,.histitem{display:flex;align-items:center;gap:.5rem;padding:.375rem .25rem;border-radius:calc(var(--radius) - 2px)}
+.refitem,.histitem,.ruleitem,.memitem{display:flex;align-items:center;gap:.5rem;padding:.375rem .25rem;border-radius:calc(var(--radius) - 2px)}
 .refitem:hover,.histitem:hover{background:hsl(var(--accent))}
 .refitem .name,.histitem .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .refitem .size,.histitem .meta{font-size:.75rem;color:hsl(var(--muted-foreground));flex-shrink:0}
-.refitem button,.histitem button{height:1.75rem;padding:0 .5rem;font-size:.75rem}
 .refitem audio,.histitem audio{height:2rem;max-width:11rem}
 #statusbar{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
 .audio-out{width:100%;margin-top:.5rem}
+.audio-mini{height:2rem;max-width:13rem}
 .log{background:hsl(var(--muted));border-radius:calc(var(--radius) - 2px);padding:.75rem;font-family:ui-monospace,Consolas,monospace;font-size:.75rem;white-space:pre-wrap;word-break:break-all;max-height:10rem;overflow-y:auto;color:hsl(var(--muted-foreground))}
 .toast{position:fixed;right:1rem;bottom:1rem;background:hsl(var(--card));border:1px solid hsl(var(--border));border-radius:var(--radius);box-shadow:0 10px 15px -3px rgb(0 0 0/.1);padding:.75rem 1rem;font-size:.8125rem;display:none;z-index:50;max-width:24rem}
 .toast.show{display:block}
 .toast.err{border-color:hsl(var(--destructive)/.4);color:hsl(var(--destructive))}
 .theme-btn{margin-left:auto;background:none;color:hsl(var(--muted-foreground));height:2rem;width:2rem;border-radius:calc(var(--radius) - 2px);display:flex;align-items:center;justify-content:center}
 .theme-btn:hover{color:hsl(var(--foreground));background:hsl(var(--accent))}
-.rootrow{display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem}
+.rootrow,.grouphead{display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem}
 .rootrow input{flex:1}
+.membox{border:1px dashed hsl(var(--border));border-radius:calc(var(--radius) - 2px);padding:.5rem;margin:.5rem 0}
 </style>
 </head>
 <body>
@@ -117,6 +117,10 @@ textarea{resize:vertical;min-height:6rem}
       <div class="nav-label">语音</div>
       <a class="nav-item" data-page="tts" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></svg><span>语音合成</span></a>
       <a class="nav-item" data-page="reflib" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><span>参考音频库</span></a>
+      <div class="nav-label">映射与配置</div>
+      <a class="nav-item" data-page="emotions" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></svg><span>情绪映射</span></a>
+      <a class="nav-item" data-page="groups" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>音色分组</span></a>
+      <a class="nav-item" data-page="api" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h10M4 12h16M4 17h7"/><circle cx="18" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg><span>API 配置</span></a>
       <div class="nav-label">记录</div>
       <a class="nav-item" data-page="history" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg><span>请求历史</span></a>
     </nav>
@@ -130,7 +134,7 @@ textarea{resize:vertical;min-height:6rem}
     <!-- 状态页 -->
     <section class="page active" id="page-status">
       <h2 class="page-title">状态总览</h2>
-      <p class="page-sub">Xinference 服务与 IndexTTS-2.5 运行状态（数据来自 9997 REST API，只读展示）。</p>
+      <p class="page-sub">Xinference 服务与 IndexTTS-2.5 运行状态（只读展示）。</p>
       <div id="statusbar" class="card">
         <span class="pill" id="pill-svc"><span class="dot"></span><span id="svc-text">检测中…</span></span>
         <span class="pill" id="pill-model"><span class="dot"></span><span id="model-text">模型未知</span></span>
@@ -158,10 +162,10 @@ textarea{resize:vertical;min-height:6rem}
     <!-- 合成页 -->
     <section class="page" id="page-tts">
       <h2 class="page-title">语音合成</h2>
-      <p class="page-sub">文本 + 参考音频 → 语音。同参数自动命中缓存；每次请求自动归档到「请求历史」。</p>
+      <p class="page-sub">同参数自动缓存命中；每次请求自动归档；情绪映射命中关键词自动应用。</p>
       <div class="card">
         <h3>输入</h3>
-        <label class="f">合成文本
+        <label class="f">合成文本（情绪映射按此处关键词自动匹配）
           <textarea id="tts-text" placeholder="要合成的文本…">大家好，欢迎体验 IndexTTS-2.5 本地语音服务。</textarea>
         </label>
         <div class="grid2" style="margin-top:.75rem">
@@ -177,28 +181,59 @@ textarea{resize:vertical;min-height:6rem}
             <input type="number" id="tts-speed" value="1.0" step="0.05" min="0.5" max="2.0">
           </label>
         </div>
-        <div style="margin-top:.75rem">
-          <label class="f">参考音频（音色来源，3–10 秒为佳）
-            <div class="row" style="margin-top:.25rem">
-              <select id="tts-ref" style="flex:1;min-width:16rem"><option value="">— 从参考音频库选择 —</option></select>
-              <span style="font-size:.75rem;color:hsl(var(--muted-foreground))">或</span>
-              <input type="file" id="tts-ref-file" accept=".wav,.mp3,.flac,.ogg,audio/*" style="font-size:.75rem">
-            </div>
-          </label>
-        </div>
       </div>
       <div class="card">
-        <h3>情感控制（三选一，可叠加 alpha）</h3>
+        <h3>音色来源</h3>
         <div class="row">
-          <label class="f" style="min-width:11rem">模式
-            <select id="emo-mode">
+          <label class="f" style="min-width:10rem">方式
+            <select id="ref-mode" onchange="renderRefMode()">
+              <option value="lib" selected>库选择</option>
+              <option value="group">音色分组</option>
+              <option value="upload">上传文件</option>
+            </select>
+          </label>
+          <div id="ref-lib-box" style="flex:1;min-width:18rem">
+            <label class="f">库音频
+              <select id="tts-ref" onchange="updateRefPreview()"><option value="">— 选择 —</option></select>
+            </label>
+          </div>
+          <div id="ref-group-box" style="display:none;flex:1;min-width:18rem">
+            <div class="grid2">
+              <label class="f">分组
+                <select id="tts-group" onchange="renderGroupMembers()"><option value="">— 选择分组 —</option></select>
+              </label>
+              <label class="f">成员（情绪）
+                <select id="tts-group-member" onchange="updateRefPreview()"><option value="">— 选择 —</option></select>
+              </label>
+            </div>
+          </div>
+          <div id="ref-upload-box" style="display:none;flex:1;min-width:18rem">
+            <label class="f">本地文件
+              <input type="file" id="tts-ref-file" accept=".wav,.mp3,.flac,.ogg,audio/*" style="font-size:.75rem" onchange="updateRefPreview()">
+            </label>
+          </div>
+        </div>
+        <audio id="ref-preview" class="audio-mini" controls style="margin-top:.5rem;display:none" title="参考音频试听"></audio>
+      </div>
+      <div class="card">
+        <h3>情感控制</h3>
+        <div class="row">
+          <label class="f" style="min-width:13rem">模式
+            <select id="emo-mode" onchange="renderEmoMode()">
               <option value="none" selected>无（跟随参考音频情绪）</option>
               <option value="vector">情感向量（8 维手动）</option>
-              <option value="text">文字情感描述（Qwen，未加载会惰性唤醒）</option>
+              <option value="text">文字情感描述（Qwen）</option>
+              <option value="audio">音频引导（情感参考音频）</option>
             </select>
           </label>
           <label class="f" style="min-width:8rem">emo_alpha（0–1）
             <input type="number" id="emo-alpha" value="1.0" step="0.05" min="0" max="1">
+          </label>
+          <label class="f" style="min-width:13rem">情绪映射（快速应用）
+            <select id="emo-rule" onchange="applyRule(false)"><option value="">— 选择映射规则 —</option></select>
+          </label>
+          <label class="f" style="min-width:9rem;flex-direction:row;align-items:center;gap:.375rem">按关键词自动
+            <input type="checkbox" id="emo-auto" checked style="width:auto">
           </label>
         </div>
         <div id="emo-vector-box" style="display:none;margin-top:.75rem">
@@ -206,16 +241,25 @@ textarea{resize:vertical;min-height:6rem}
             <input type="text" id="emo-vector" value="[0,1,0,0,0,0,0,0]">
           </label>
           <div class="row" style="margin-top:.5rem">
-            <button class="btn btn-secondary" onclick="setEmo('[1,0,0,0,0,0,0,0]')">高兴</button>
-            <button class="btn btn-secondary" onclick="setEmo('[0,1,0,0,0,0,0,0]')">愤怒</button>
-            <button class="btn btn-secondary" onclick="setEmo('[0,0,1,0,0,0,0,0]')">悲伤</button>
-            <button class="btn btn-secondary" onclick="setEmo('[0,0,0,0,0,0,0,1]')">平静</button>
-            <button class="btn btn-secondary" onclick="setEmo('[0,0,0,0,0,0,1,0]')">惊讶</button>
+            <button class="btn btn-secondary btn-sm" onclick="setEmo('[1,0,0,0,0,0,0,0]')">高兴</button>
+            <button class="btn btn-secondary btn-sm" onclick="setEmo('[0,1,0,0,0,0,0,0]')">愤怒</button>
+            <button class="btn btn-secondary btn-sm" onclick="setEmo('[0,0,1,0,0,0,0,0]')">悲伤</button>
+            <button class="btn btn-secondary btn-sm" onclick="setEmo('[0,0,0,0,0,0,0,1]')">平静</button>
+            <button class="btn btn-secondary btn-sm" onclick="setEmo('[0,0,0,0,0,0,1,0]')">惊讶</button>
           </div>
         </div>
         <div id="emo-text-box" style="display:none;margin-top:.75rem">
           <label class="f">情感描述（英文效果更稳，如 "joyful and excited"）
             <input type="text" id="emo-text" value="joyful and excited">
+          </label>
+        </div>
+        <div id="emo-audio-box" style="display:none;margin-top:.75rem">
+          <label class="f">情感引导音频（哪种情绪的参考样本；优先库选择）
+            <div class="row" style="margin-top:.25rem">
+              <input type="text" id="emo-audio-filter" placeholder="搜索…" style="max-width:10rem" oninput="renderEmoAudioOptions()">
+              <select id="emo-audio-lib" style="flex:1;min-width:14rem"><option value="">— 从库选择 —</option></select>
+              <input type="file" id="emo-audio-file" accept=".wav,.mp3,.flac,.ogg,audio/*" style="font-size:.75rem">
+            </div>
           </label>
         </div>
       </div>
@@ -231,6 +275,7 @@ textarea{resize:vertical;min-height:6rem}
           <audio class="audio-out" id="tts-audio" controls></audio>
           <div class="row" style="margin-top:.5rem">
             <a class="btn btn-secondary" id="tts-dl" download>下载</a>
+            <button class="btn btn-secondary" onclick="saveAsDefault()">把当前参数存为默认</button>
           </div>
         </div>
         <div class="log" id="tts-log" style="margin-top:.75rem;display:none"></div>
@@ -240,7 +285,7 @@ textarea{resize:vertical;min-height:6rem}
     <!-- 音色库页 -->
     <section class="page" id="page-reflib">
       <h2 class="page-title">参考音频库</h2>
-      <p class="page-sub">库源可自由增删（console/library.json），不依赖任何固定目录结构——任意子目录层级都会按「根/子目录」分组列出。</p>
+      <p class="page-sub">库源可自由增删（console/library.json），任意目录层级按「根/子目录」分组。</p>
       <div class="card">
         <h3>库源配置</h3>
         <div id="root-list"></div>
@@ -251,12 +296,13 @@ textarea{resize:vertical;min-height:6rem}
         </div>
         <div class="row" style="margin-top:.5rem">
           <button class="btn btn-primary" onclick="saveRoots()">保存库源</button>
-          <span style="font-size:.75rem;color:hsl(var(--muted-foreground))">保存后立即重扫；不存在的路径会标红但允许保留。</span>
+          <span style="font-size:.75rem;color:hsl(var(--muted-foreground))">保存后立即重扫；不存在的路径标红但允许保留。</span>
         </div>
       </div>
       <div class="card">
         <h3>音频浏览（<span id="reflib-count">…</span>）</h3>
         <div class="row" style="margin-bottom:.75rem">
+          <input type="text" id="reflib-search" placeholder="搜索名称/分组…" style="max-width:18rem" oninput="renderRefLib()">
           <button class="btn btn-secondary" onclick="loadRefLib()">刷新</button>
           <span style="font-size:.75rem;color:hsl(var(--muted-foreground))">▶ 试听；「用作参考」回填合成页。</span>
         </div>
@@ -264,10 +310,75 @@ textarea{resize:vertical;min-height:6rem}
       </div>
     </section>
 
+    <!-- 情绪映射页 -->
+    <section class="page" id="page-emotions">
+      <h2 class="page-title">情绪映射</h2>
+      <p class="page-sub">关键词 → 情感向量 / 文字情感描述。合成时按文本自动匹配（或手动快速选择）。规则存 console/emotion_map.json。</p>
+      <div class="card">
+        <div class="row" style="margin-bottom:.75rem">
+          <button class="btn btn-secondary" onclick="loadEmotions()">刷新</button>
+          <button class="btn btn-secondary" onclick="addEmoRule()">加一条规则</button>
+          <button class="btn btn-primary" style="margin-left:auto" onclick="saveEmotions()">保存全部</button>
+        </div>
+        <div id="emo-rules">加载中…</div>
+      </div>
+    </section>
+
+    <!-- 音色分组页 -->
+    <section class="page" id="page-groups">
+      <h2 class="page-title">音色分组</h2>
+      <p class="page-sub">同角色多情绪：一个分组 = 一组带情绪标签的参考音频（其中一个是默认）。合成页「音色来源 → 音色分组」按此消费。存 console/voice_groups.json。</p>
+      <div class="card">
+        <div class="row" style="margin-bottom:.75rem">
+          <button class="btn btn-secondary" onclick="loadGroups()">刷新</button>
+          <button class="btn btn-secondary" onclick="addGroup()">加一个分组</button>
+          <button class="btn btn-primary" style="margin-left:auto" onclick="saveGroups()">保存全部</button>
+        </div>
+        <div id="group-list">加载中…</div>
+      </div>
+    </section>
+
+    <!-- API 配置页 -->
+    <section class="page" id="page-api">
+      <h2 class="page-title">API 配置</h2>
+      <p class="page-sub">合成默认参数（新请求自动套用）；服务端点只读展示。</p>
+      <div class="card">
+        <h3>默认参数</h3>
+        <div class="grid2">
+          <label class="f">默认语言
+            <select id="def-lang"><option value="ZH">中文 (ZH)</option><option value="EN">英文 (EN)</option><option value="JA">日文 (JA)</option><option value="ZHEN">中英混合 (ZHEN)</option></select>
+          </label>
+          <label class="f">默认语速
+            <input type="number" id="def-speed" value="1.0" step="0.05" min="0.5" max="2.0">
+          </label>
+          <label class="f">默认输出格式
+            <select id="def-fmt"><option value="wav">wav</option><option value="mp3">mp3</option></select>
+          </label>
+          <label class="f">默认 emo_alpha
+            <input type="number" id="def-alpha" value="1.0" step="0.05" min="0" max="1">
+          </label>
+        </div>
+        <div class="row" style="margin-top:.75rem">
+          <label class="f" style="flex-direction:row;align-items:center;gap:.375rem">按关键词自动应用情绪映射
+            <input type="checkbox" id="def-auto" style="width:auto">
+          </label>
+          <button class="btn btn-primary" style="margin-left:auto" onclick="saveDefaults()">保存默认参数</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>服务端点（只读，改端点请编辑 config.ps1）</h3>
+        <dl class="kv" id="api-kv"><dt>加载中…</dt><dd></dd></dl>
+      </div>
+      <div class="card">
+        <h3>数据位置</h3>
+        <dl class="kv" id="paths-kv"><dt>加载中…</dt><dd></dd></dl>
+      </div>
+    </section>
+
     <!-- 历史页 -->
     <section class="page" id="page-history">
       <h2 class="page-title">请求历史</h2>
-      <p class="page-sub">每次合成请求（含失败）归档于 console/history/：meta.json（完整参数、耗时、错误）+ 输出音频（+上传型参考音频副本）。最多保留 500 条，超出自动清理最旧。</p>
+      <p class="page-sub">每次合成请求（含失败）归档于 console/history/：meta.json + 输出音频（+上传型参考音频副本）。最多保留 500 条。</p>
       <div class="card">
         <div class="row" style="margin-bottom:.75rem">
           <button class="btn btn-secondary" onclick="loadHistory()">刷新</button>
@@ -285,6 +396,8 @@ textarea{resize:vertical;min-height:6rem}
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+function fmtBytes(b) { return b > 1048576 ? (b/1048576).toFixed(1) + " MB" : (b/1024).toFixed(0) + " KB"; }
 
 /* ── 主题 ── */
 const themeKey = "tts-console-theme";
@@ -307,10 +420,12 @@ document.querySelectorAll(".nav-item").forEach((el) => {
     el.classList.add("active");
     $("page-" + el.dataset.page).classList.add("active");
     if (el.dataset.page === "history") loadHistory();
+    if (el.dataset.page === "emotions") loadEmotions();
+    if (el.dataset.page === "groups") loadGroups();
+    if (el.dataset.page === "api") loadApiPage();
   };
 });
 
-/* ── 提示 ── */
 let toastTimer;
 function toast(msg, isErr) {
   const t = $("toast");
@@ -319,19 +434,68 @@ function toast(msg, isErr) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (t.className = "toast"), 5000);
 }
-
-/* ── 状态 ── */
 function setPill(id, textId, cls, text) {
   $(id).className = "pill " + cls;
   $(textId).textContent = text;
 }
-function fmtBytes(b) { return b > 1048576 ? (b/1048576).toFixed(1) + " MB" : (b/1024).toFixed(0) + " KB"; }
+
+/* ── 音频库（全局缓存 + 搜索 + 播种选择器） ── */
+let refItems = [];
+function libValue(it) { return it.root + "|" + it.rel; }
+function libLabel(it) { return it.group + " / " + it.name; }
+async function loadRefLib() {
+  try {
+    const data = await (await fetch("/api/reflib")).json();
+    refItems = data.items ?? [];
+    $("reflib-count").textContent = refItems.length + " 个音频";
+    renderRefLib();
+    $("tts-ref").innerHTML = '<option value="">— 选择 —</option>' +
+      refItems.map((it) => `<option value="${esc(libValue(it))}">${esc(libLabel(it))}</option>`).join("");
+    renderEmoAudioOptions();
+  } catch {
+    $("reflib-list").innerHTML = '<div class="refgroup">参考音频库不可达</div>';
+  }
+}
+function renderRefLib() {
+  const list = $("reflib-list");
+  const kw = ($("reflib-search").value || "").toLowerCase().trim();
+  const items = kw ? refItems.filter((it) => libLabel(it).toLowerCase().includes(kw)) : refItems;
+  if (!refItems.length) { list.innerHTML = '<div class="refgroup">库为空（请在上方「库源配置」添加目录）</div>'; return; }
+  if (!items.length) { list.innerHTML = '<div class="refgroup">无匹配结果</div>'; return; }
+  const byGroup = {};
+  items.forEach((it) => (byGroup[it.group] ??= []).push(it));
+  list.innerHTML = Object.entries(byGroup).map(([g, arr]) =>
+    `<div class="refgroup"><div class="gname">${esc(g)}</div>` +
+    arr.map((it) => `<div class="refitem">
+      <audio src="/api/reflib/file?root=${it.root}&rel=${encodeURIComponent(it.rel)}" preload="none" controls></audio>
+      <span class="name" title="${esc(it.rel)}">${esc(it.name)}</span>
+      <span class="size">${it.size_kb} KB</span>
+      <button class="btn btn-secondary btn-sm" onclick='useRef(${it.root},"${it.rel.replace(/\\/g, "\\\\")}")'>用作参考</button>
+    </div>`).join("") + "</div>").join("");
+}
+function useRef(root, rel) {
+  $("ref-mode").value = "lib"; renderRefMode();
+  $("tts-ref").value = root + "|" + rel; updateRefPreview();
+  document.querySelector('.nav-item[data-page="tts"]').click();
+  toast("已选为参考音频：" + rel);
+}
+/* 简易过滤选择器（分组页成员 / 情感音频用） */
+function fillPicker(selId, kw) {
+  const sel = $(selId);
+  const k = (kw || "").toLowerCase().trim();
+  const items = k ? refItems.filter((it) => libLabel(it).toLowerCase().includes(k)) : refItems;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— 选择 —</option>' +
+    items.slice(0, 400).map((it) => `<option value="${esc(libValue(it))}">${esc(libLabel(it))}</option>`).join("");
+  if (cur) sel.value = cur;
+}
+
+/* ── 状态 ── */
 async function refreshAll() {
   try {
     const cfg = await (await fetch("/api/config")).json();
     $("foot-status").textContent = "9997 API · " + cfg.model_name;
-    $("cfg-kv").innerHTML = Object.entries(cfg).map(
-      ([k, v]) => `<dt>${k}</dt><dd>${String(v)}</dd>`).join("");
+    $("cfg-kv").innerHTML = Object.entries(cfg).map(([k, v]) => `<dt>${k}</dt><dd>${esc(String(v))}</dd>`).join("");
   } catch { toast("读取配置失败", true); }
   try {
     const st = await (await fetch("/api/status")).json();
@@ -341,9 +505,9 @@ async function refreshAll() {
     setPill("pill-svc", "svc-text", "ok", "服务运行中");
     setPill("pill-model", "model-text", running ? "ok" : "warn", running ? "模型已加载: " + running : "模型未加载");
     $("status-kv").innerHTML =
-      `<dt>endpoint</dt><dd>${st.backend ?? "-"}</dd>` +
+      `<dt>endpoint</dt><dd>${esc(st.backend ?? "-")}</dd>` +
       `<dt>运行模型数</dt><dd>${Object.keys(models).length}</dd>` +
-      (uid ? `<dt>model_uid</dt><dd>${uid}</dd><dt>状态</dt><dd>${models[uid]?.state ?? "-"}</dd>` : "");
+      (uid ? `<dt>model_uid</dt><dd>${esc(uid)}</dd><dt>状态</dt><dd>${esc(models[uid]?.state ?? "-")}</dd>` : "");
   } catch {
     setPill("pill-svc", "svc-text", "bad", "服务未运行");
     setPill("pill-model", "model-text", "warn", "模型未知");
@@ -383,10 +547,10 @@ async function loadLibrary() {
 function renderRoots() {
   $("root-list").innerHTML = libRoots.map((r, i) =>
     `<div class="rootrow">
-      <input type="text" value="${r.name.replace(/"/g, "&quot;")}" data-i="${i}" data-k="name" style="max-width:12rem" title="显示名">
-      <input type="text" value="${r.path.replace(/"/g, "&quot;")}" data-i="${i}" data-k="path" title="目录路径" style="${r.exists === false ? "border-color:hsl(var(--destructive))" : ""}">
+      <input type="text" value="${esc(r.name)}" data-i="${i}" data-k="name" style="max-width:12rem" title="显示名">
+      <input type="text" value="${esc(r.path)}" data-i="${i}" data-k="path" title="目录路径" style="${r.exists === false ? "border-color:hsl(var(--destructive))" : ""}">
       <span class="pill ${r.exists === false ? "bad" : "ok"}"><span class="dot"></span>${r.exists === false ? "路径不存在" : "可用"}</span>
-      <button class="btn btn-danger" onclick="removeRoot(${i})">删</button>
+      <button class="btn btn-danger btn-sm" onclick="removeRoot(${i})">删</button>
     </div>`).join("") || '<div style="color:hsl(var(--muted-foreground));font-size:.75rem">尚无库源，请在下方添加。</div>';
   document.querySelectorAll("#root-list input").forEach((inp) => {
     inp.onchange = () => { libRoots[+inp.dataset.i][inp.dataset.k] = inp.value; };
@@ -411,57 +575,321 @@ async function saveRoots() {
   loadRefLib();
 }
 
-/* ── 参考音频库 ── */
-let refItems = [];
-async function loadRefLib() {
-  const list = $("reflib-list");
-  try {
-    const data = await (await fetch("/api/reflib")).json();
-    $("reflib-count").textContent = data.total + " 个音频";
-    refItems = data.items ?? [];
-    if (!refItems.length) {
-      list.innerHTML = `<div class="refgroup">库为空${(data.missing ?? []).length ? "（路径不存在的库源已跳过）" : "（请在上方「库源配置」添加目录）"}</div>`;
-      $("tts-ref").innerHTML = '<option value="">— 从参考音频库选择 —</option>';
-      return;
-    }
-    const byGroup = {};
-    refItems.forEach((it) => (byGroup[it.group] ??= []).push(it));
-    list.innerHTML = Object.entries(byGroup).map(([g, items]) =>
-      `<div class="refgroup"><div class="gname">${g}</div>` +
-      items.map((it) => `<div class="refitem">
-        <audio src="/api/reflib/file?root=${it.root}&rel=${encodeURIComponent(it.rel)}" preload="none" controls></audio>
-        <span class="name" title="${it.rel}">${it.name}</span>
-        <span class="size">${it.size_kb} KB</span>
-        <button class="btn btn-secondary" onclick='useRef(${it.root},"${it.rel.replace(/\\/g, "\\\\")}")'>用作参考</button>
-      </div>`).join("") + "</div>").join("");
-    // 回填合成页下拉（value = "root|rel"）
-    const sel = $("tts-ref");
-    sel.innerHTML = '<option value="">— 从参考音频库选择 —</option>' +
-      refItems.map((it) => `<option value="${it.root}|${it.rel}">${it.group} / ${it.name}</option>`).join("");
-  } catch { list.innerHTML = '<div class="refgroup">参考音频库不可达（控制台服务异常？）</div>'; }
+/* ── 音色来源 / 预览 ── */
+function currentRefValue() {
+  const mode = $("ref-mode").value;
+  if (mode === "lib") return $("tts-ref").value;
+  if (mode === "group") return $("tts-group-member").value;
+  return "";
 }
-function useRef(root, rel) {
-  $("tts-ref").value = root + "|" + rel;
-  document.querySelector('.nav-item[data-page="tts"]').click();
-  toast("已选为参考音频：" + rel);
+function updateRefPreview() {
+  const v = currentRefValue();
+  const player = $("ref-preview");
+  if ($("ref-mode").value === "upload") {
+    const f = $("tts-ref-file").files[0];
+    if (f) { player.src = URL.createObjectURL(f); player.style.display = ""; }
+    else player.style.display = "none";
+    return;
+  }
+  if (!v) { player.style.display = "none"; player.removeAttribute("src"); return; }
+  const [root, rel] = v.split("|");
+  player.src = `/api/reflib/file?root=${root}&rel=${encodeURIComponent(rel)}`;
+  player.style.display = "";
+}
+function renderRefMode() {
+  const m = $("ref-mode").value;
+  $("ref-lib-box").style.display = m === "lib" ? "" : "none";
+  $("ref-group-box").style.display = m === "group" ? "" : "none";
+  $("ref-upload-box").style.display = m === "upload" ? "" : "none";
+  updateRefPreview();
+}
+function renderGroupMembers() {
+  const g = groups.find((x) => x.name === $("tts-group").value);
+  const sel = $("tts-group-member");
+  if (!g) { sel.innerHTML = '<option value="">— 选择分组 —</option>'; updateRefPreview(); return; }
+  const def = (g.members ?? []).find((m) => m.is_default) ?? (g.members ?? [])[0];
+  sel.innerHTML = '<option value="">— 选择 —</option>' +
+    (g.members ?? []).map((m) =>
+      `<option value="${m.root}|${esc(m.rel)}" ${def && m === def ? "selected" : ""}>${esc(m.label)}${m.is_default ? "（默认）" : ""}</option>`).join("");
+  updateRefPreview();
 }
 
-/* ── 情感模式 ── */
-$("emo-mode").onchange = () => {
+/* ── 情感控制 ── */
+let emotions = { rules: [] };
+function renderEmoMode() {
   const m = $("emo-mode").value;
   $("emo-vector-box").style.display = m === "vector" ? "" : "none";
   $("emo-text-box").style.display = m === "text" ? "" : "none";
-};
+  $("emo-audio-box").style.display = m === "audio" ? "" : "none";
+}
+function renderEmoAudioOptions() { fillPicker("emo-audio-lib", $("emo-audio-filter").value); }
 function setEmo(v) { $("emo-vector").value = v; }
+function renderEmoRuleOptions() {
+  $("emo-rule").innerHTML = '<option value="">— 选择映射规则 —</option>' +
+    (emotions.rules ?? []).map((r, i) => `<option value="${i}">${esc(r.name)}（${esc((r.keywords ?? []).join("/"))}）</option>`).join("");
+}
+function applyRule(fromAuto) {
+  const idx = $("emo-rule").value;
+  if (idx === "") return;
+  const r = emotions.rules[+idx];
+  if (!r) return;
+  if (r.action === "vector") {
+    $("emo-mode").value = "vector"; renderEmoMode();
+    $("emo-vector").value = JSON.stringify(r.vector ?? [0,0,0,0,0,0,0,0]);
+  } else {
+    $("emo-mode").value = "text"; renderEmoMode();
+    $("emo-text").value = r.text ?? "";
+  }
+  if (r.alpha !== undefined) $("emo-alpha").value = r.alpha;
+  if (!fromAuto) toast("已应用映射规则：" + r.name);
+}
+function matchEmotionRule(text) {
+  const t = String(text ?? "");
+  for (const r of (emotions.rules ?? [])) {
+    for (const kw of (r.keywords ?? [])) {
+      if (kw && t.includes(kw)) return r;
+    }
+  }
+  return null;
+}
+
+/* ── 情绪映射页 ── */
+async function loadEmotions() {
+  try {
+    emotions = await (await fetch("/api/emotions")).json();
+    renderEmoRules(); renderEmoRuleOptions();
+  } catch { toast("读取情绪映射失败", true); }
+}
+function renderEmoRules() {
+  const box = $("emo-rules");
+  if (!(emotions.rules ?? []).length) { box.innerHTML = '<div style="color:hsl(var(--muted-foreground));font-size:.75rem">暂无规则，点「加一条规则」。</div>'; return; }
+  box.innerHTML = emotions.rules.map((r, i) =>
+    `<div class="ruleitem" style="flex-wrap:wrap;align-items:flex-end">
+      <label class="f" style="width:9rem">规则名
+        <input type="text" value="${esc(r.name)}" data-i="${i}" data-k="name">
+      </label>
+      <label class="f" style="width:14rem">关键词（逗号分隔）
+        <input type="text" value="${esc((r.keywords ?? []).join(","))}" data-i="${i}" data-k="kw">
+      </label>
+      <label class="f" style="width:9rem">动作
+        <select data-i="${i}" data-k="action">
+          <option value="vector" ${r.action === "vector" ? "selected" : ""}>情感向量</option>
+          <option value="text" ${r.action === "text" ? "selected" : ""}>文字情感</option>
+        </select>
+      </label>
+      <label class="f" style="width:17rem" data-show="${i}">${r.action === "vector" ? "向量" : "情感描述"}
+        <input type="text" value="${esc(r.action === "vector" ? JSON.stringify(r.vector ?? []) : (r.text ?? ""))}" data-i="${i}" data-k="value">
+      </label>
+      <label class="f" style="width:5rem">alpha
+        <input type="number" step="0.05" min="0" max="1" value="${r.alpha ?? 1.0}" data-i="${i}" data-k="alpha">
+      </label>
+      <button class="btn btn-danger btn-sm" onclick="delEmoRule(${i})">删</button>
+    </div>`).join("");
+  box.querySelectorAll("input,select").forEach((inp) => {
+    inp.onchange = () => {
+      const i = +inp.dataset.i, k = inp.dataset.k, r = emotions.rules[i];
+      if (k === "name") r.name = inp.value;
+      else if (k === "kw") r.keywords = inp.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+      else if (k === "action") { r.action = inp.value; renderEmoRules(); }
+      else if (k === "alpha") r.alpha = parseFloat(inp.value) || 1.0;
+      else if (k === "value") {
+        if (r.action === "vector") { try { r.vector = JSON.parse(inp.value); } catch { toast("向量不是合法 JSON", true); } }
+        else r.text = inp.value;
+      }
+      renderEmoRuleOptions();
+    };
+  });
+}
+function addEmoRule() {
+  emotions.rules ??= [];
+  emotions.rules.push({ name: "新规则", keywords: [], action: "vector", vector: [1,0,0,0,0,0,0,0], alpha: 1.0 });
+  renderEmoRules();
+}
+function delEmoRule(i) { emotions.rules.splice(i, 1); renderEmoRules(); renderEmoRuleOptions(); }
+async function saveEmotions() {
+  const r = await (await fetch("/api/emotions", { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify(emotions) })).json();
+  emotions = r;
+  renderEmoRules(); renderEmoRuleOptions();
+  toast("情绪映射已保存");
+}
+
+/* ── 音色分组页 ── */
+let groups = { groups: [] };
+async function loadGroups() {
+  try {
+    groups = await (await fetch("/api/groups")).json();
+    renderGroups(); renderGroupSelect();
+  } catch { toast("读取音色分组失败", true); }
+}
+function renderGroupSelect() {
+  $("tts-group").innerHTML = '<option value="">— 选择分组 —</option>' +
+    (groups.groups ?? []).map((g) => `<option value="${esc(g.name)}">${esc(g.name)}</option>`).join("");
+  renderGroupMembers();
+}
+function renderGroups() {
+  const box = $("group-list");
+  if (!(groups.groups ?? []).length) { box.innerHTML = '<div style="color:hsl(var(--muted-foreground));font-size:.75rem">暂无分组，点「加一个分组」。</div>'; return; }
+  box.innerHTML = groups.groups.map((g, gi) =>
+    `<div class="membox">
+      <div class="grouphead">
+        <label class="f" style="width:14rem">分组名
+          <input type="text" value="${esc(g.name)}" data-g="${gi}" data-k="name">
+        </label>
+        <button class="btn btn-danger btn-sm" onclick="delGroup(${gi})">删分组</button>
+        <span style="font-size:.75rem;color:hsl(var(--muted-foreground))">成员默认项用 ○ 选定</span>
+      </div>
+      ${(g.members ?? []).map((m, mi) => `
+        <div class="memitem">
+          <input type="radio" name="def-${gi}" ${m.is_default ? "checked" : ""} onchange="setDefaultMember(${gi},${mi})" title="默认成员" style="width:auto">
+          <input type="text" value="${esc(m.label)}" data-g="${gi}" data-m="${mi}" data-k="label" placeholder="情绪标签（如 平静/开心）" style="max-width:11rem">
+          <input type="text" value="${esc(m.rel)}" readonly title="${esc(m.rel)}" style="flex:1;font-size:.75rem;color:hsl(var(--muted-foreground))">
+          <button class="btn btn-danger btn-sm" onclick="delGroupMember(${gi},${mi})">删</button>
+        </div>`).join("")}
+      <div class="memitem">
+        <span style="font-size:.75rem;color:hsl(var(--muted-foreground))">加成员：</span>
+        <input type="text" id="mem-label-${gi}" placeholder="情绪标签" style="max-width:10rem">
+        <input type="text" id="mem-filter-${gi}" placeholder="搜索音频…" style="max-width:10rem" oninput="fillPicker('mem-sel-${gi}', this.value)">
+        <select id="mem-sel-${gi}" style="min-width:14rem"><option value="">— 选择 —</option></select>
+        <button class="btn btn-secondary btn-sm" onclick="addGroupMember(${gi})">添加</button>
+      </div>
+    </div>`).join("");
+  box.querySelectorAll("input[data-g][data-k='name']").forEach((inp) => {
+    inp.onchange = () => { groups.groups[+inp.dataset.g].name = inp.value; renderGroupSelect(); };
+  });
+  box.querySelectorAll("input[data-g][data-m][data-k='label']").forEach((inp) => {
+    inp.onchange = () => { groups.groups[+inp.dataset.g].members[+inp.dataset.m].label = inp.value; };
+  });
+}
+function setDefaultMember(gi, mi) {
+  groups.groups[gi].members.forEach((m, i) => (m.is_default = i === mi));
+}
+function addGroupMember(gi) {
+  const label = $(`mem-label-${gi}`).value.trim() || "未命名";
+  const v = $(`mem-sel-${gi}`).value;
+  if (!v) { toast("请选择音频", true); return; }
+  const [root, rel] = v.split("|");
+  groups.groups[gi].members ??= [];
+  const first = groups.groups[gi].members.length === 0;
+  groups.groups[gi].members.push({ label, root: +root, rel, is_default: first });
+  renderGroups();
+}
+function delGroupMember(gi, mi) { groups.groups[gi].members.splice(mi, 1); renderGroups(); }
+function addGroup() {
+  groups.groups ??= [];
+  groups.groups.push({ name: "新分组", members: [] });
+  renderGroups();
+}
+function delGroup(gi) { groups.groups.splice(gi, 1); renderGroups(); renderGroupSelect(); }
+async function saveGroups() {
+  const r = await (await fetch("/api/groups", { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify(groups) })).json();
+  groups = r;
+  renderGroups(); renderGroupSelect();
+  toast("音色分组已保存");
+}
+
+/* ── API 配置页 ── */
+async function loadApiPage() {
+  try {
+    const s = await (await fetch("/api/settings")).json();
+    $("def-lang").value = s.lang ?? "ZH";
+    $("def-speed").value = s.speed ?? 1.0;
+    $("def-fmt").value = s.response_format ?? "wav";
+    $("def-alpha").value = s.emo_alpha ?? 1.0;
+    $("def-auto").checked = s.auto_emotion !== false;
+  } catch { toast("读取默认参数失败", true); }
+  try {
+    const cfg = await (await fetch("/api/config")).json();
+    $("api-kv").innerHTML = Object.entries(cfg).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join("");
+    $("paths-kv").innerHTML = [
+      ["音色库配置", cfg.library_file], ["情绪映射", "console/emotion_map.json"],
+      ["音色分组", "console/voice_groups.json"], ["默认参数", "console/settings.json"],
+      ["请求历史", cfg.history_dir], ["合成缓存", cfg.cache_dir]].map(
+      ([k, v]) => `<dt>${k}</dt><dd>${esc(String(v))}</dd>`).join("");
+  } catch {}
+}
+async function saveDefaults() {
+  const body = {
+    lang: $("def-lang").value, speed: parseFloat($("def-speed").value) || 1.0,
+    response_format: $("def-fmt").value, emo_alpha: parseFloat($("def-alpha").value) || 1.0,
+    auto_emotion: $("def-auto").checked,
+  };
+  await (await fetch("/api/settings", { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
+  toast("默认参数已保存（新请求自动套用）");
+  applyDefaultsToForm();
+}
+function applyDefaultsToForm() {
+  fetch("/api/settings").then((r) => r.json()).then((s) => {
+    $("tts-lang").value = s.lang ?? "ZH";
+    $("tts-speed").value = s.speed ?? 1.0;
+    $("tts-fmt").value = s.response_format ?? "wav";
+    $("emo-alpha").value = s.emo_alpha ?? 1.0;
+    $("emo-auto").checked = s.auto_emotion !== false;
+  }).catch(() => {});
+}
+
+/* ── 请求历史 ── */
+async function loadHistory() {
+  const list = $("hist-list");
+  try {
+    const data = await (await fetch("/api/history?limit=100")).json();
+    $("hist-total").textContent = "共 " + data.total + " 条（显示最近 " + data.items.length + " 条）";
+    if (!data.items.length) { list.innerHTML = '<div class="refgroup">暂无请求历史</div>'; return; }
+    list.innerHTML = data.items.map((m) => {
+      const audio = (m.audio && m.status === 200) ? `<audio src="/api/history/file?id=${m.id}&name=${m.audio}" preload="none" controls></audio>` : "";
+      const status = m.status === 200
+        ? '<span class="pill ok"><span class="dot"></span>OK</span>'
+        : '<span class="pill bad"><span class="dot"></span>FAIL ' + m.status + "</span>";
+      const cacheTag = m.cache === "hit" ? ' <span class="pill warn"><span class="dot"></span>缓存</span>' : "";
+      return `<div class="histitem">
+        ${audio}
+        <span class="name" title="${esc(m.input)}">${esc(String(m.input ?? "").slice(0, 40))}</span>
+        <span class="meta">${esc(m.ts ?? "")}</span>
+        ${status}${cacheTag}
+        <span class="meta">${fmtBytes(m.bytes ?? 0)} · 上游 ${m.upstream_ms ?? "?"}ms</span>
+        <button class="btn btn-danger btn-sm" onclick="delHistory('${m.id}')">删</button>
+      </div>`;
+    }).join("");
+  } catch { list.innerHTML = '<div class="refgroup">历史读取失败</div>'; }
+}
+async function delHistory(id) {
+  if (!confirm("删除该条历史（含音频）？")) return;
+  await fetch("/api/history/" + id, { method: "DELETE" });
+  loadHistory();
+}
 
 /* ── 合成 ── */
 async function doTts() {
   const btn = $("tts-go");
   const text = $("tts-text").value.trim();
   if (!text) { toast("请输入文本", true); return; }
-  const refSel = $("tts-ref").value;
-  const refFile = $("tts-ref-file").files[0];
-  if (!refSel && !refFile) { toast("请选择参考音频（库选择或本地文件）", true); return; }
+  // 自动情绪映射：未手动选模式且开关开 → 按关键词匹配
+  let autoApplied = null;
+  if ($("emo-auto").checked && $("emo-mode").value === "none") {
+    const rule = matchEmotionRule(text);
+    if (rule) {
+      if (rule.action === "vector") {
+        $("emo-mode").value = "vector"; renderEmoMode();
+        $("emo-vector").value = JSON.stringify(rule.vector ?? []);
+      } else {
+        $("emo-mode").value = "text"; renderEmoMode();
+        $("emo-text").value = rule.text ?? "";
+      }
+      if (rule.alpha !== undefined) $("emo-alpha").value = rule.alpha;
+      autoApplied = rule.name;
+    }
+  }
+  // 音色来源解析
+  const refMode = $("ref-mode").value;
+  let refValue = currentRefValue();
+  if (refMode === "upload") {
+    if (!$("tts-ref-file").files[0]) { toast("请选择参考音频文件", true); return; }
+  } else if (!refValue) {
+    toast(refMode === "group" ? "请选择分组与成员" : "请选择参考音频", true);
+    return;
+  }
   const kwargs = { language: $("tts-lang").value };
   const alpha = parseFloat($("emo-alpha").value);
   if (Number.isFinite(alpha) && alpha !== 1.0) kwargs.emo_alpha = alpha;
@@ -472,6 +900,16 @@ async function doTts() {
   } else if (mode === "text") {
     kwargs.use_emo_text = true;
     kwargs.emo_text = $("emo-text").value.trim() || text;
+  } else if (mode === "audio") {
+    const emoFile = $("emo-audio-file").files[0];
+    let emoBytes = null, emoName = "emotion_ref";
+    if (emoFile) { emoBytes = await emoFile.arrayBuffer(); emoName = emoFile.name; }
+    else if ($("emo-audio-lib").value) {
+      const [er, erel] = $("emo-audio-lib").value.split("|");
+      const blob = await (await fetch(`/api/reflib/file?root=${er}&rel=${encodeURIComponent(erel)}`)).blob();
+      emoBytes = await blob.arrayBuffer(); emoName = erel;
+    } else { toast("音频引导模式请选择情感参考音频", true); return; }
+    kwargs.emo_prompt_speech_b64 = btoa(String.fromCharCode(...new Uint8Array(emoBytes)));
   }
   const form = new FormData();
   form.append("model", "IndexTTS-2.5");
@@ -482,16 +920,16 @@ async function doTts() {
   form.append("speed", String($("tts-speed").value || "1.0"));
   form.append("kwargs", JSON.stringify(kwargs));
   try {
-    if (refFile) form.append("prompt_speech", refFile, refFile.name);
+    if (refMode === "upload") form.append("prompt_speech", $("tts-ref-file").files[0], $("tts-ref-file").files[0].name);
     else {
-      const [root, rel] = refSel.split("|");
+      const [root, rel] = refValue.split("|");
       const blob = await (await fetch(`/api/reflib/file?root=${root}&rel=${encodeURIComponent(rel)}`)).blob();
       form.append("prompt_speech", blob, rel);
     }
   } catch { toast("参考音频读取失败", true); return; }
 
   btn.disabled = true;
-  const log = $("tts-log"); log.style.display = ""; log.textContent = "合成中…（长文本可能需要 30s+；同参数命中缓存则秒回）";
+  const log = $("tts-log"); log.style.display = ""; log.textContent = "合成中…（长文本 30s+；缓存命中秒回）";
   $("pill-cache").style.display = "none";
   const t0 = performance.now();
   try {
@@ -510,10 +948,10 @@ async function doTts() {
     $("tts-audio").src = url;
     $("tts-dl").href = url;
     $("tts-dl").download = "tts-" + Date.now() + "." + $("tts-fmt").value;
-    $("tts-meta").textContent = `${sec}s · ${fmtBytes(blob.size)} · ${kwargs.language}`;
+    $("tts-meta").textContent = `${sec}s · ${fmtBytes(blob.size)} · ${kwargs.language}` + (autoApplied ? ` · 自动情绪:${autoApplied}` : "");
     $("pill-cache").style.display = "";
     setPill("pill-cache", "cache-text", cached ? "ok" : "warn", cached ? "缓存命中" : "新合成（已入缓存）");
-    log.textContent = `${cached ? "CACHE HIT" : "OK"} ${sec}s, ${fmtBytes(blob.size)}, kwargs=${JSON.stringify(kwargs)}`;
+    log.textContent = `${cached ? "CACHE HIT" : "OK"} ${sec}s, ${fmtBytes(blob.size)}, mode=${mode}` + (autoApplied ? ` (auto:${autoApplied})` : "");
   } catch (e) {
     log.textContent = "请求失败：" + e;
     toast("合成请求失败（控制台服务未启动？）", true);
@@ -522,42 +960,17 @@ async function doTts() {
   }
 }
 
-/* ── 请求历史 ── */
-async function loadHistory() {
-  const list = $("hist-list");
-  try {
-    const data = await (await fetch("/api/history?limit=100")).json();
-    $("hist-total").textContent = "共 " + data.total + " 条（显示最近 " + data.items.length + " 条）";
-    if (!data.items.length) { list.innerHTML = '<div class="refgroup">暂无请求历史</div>'; return; }
-    list.innerHTML = data.items.map((m) => {
-      const audio = (m.audio && m.status === 200) ? `<audio src="/api/history/file?id=${m.id}&name=${m.audio}" preload="none" controls></audio>` : "";
-      const status = m.status === 200
-        ? '<span class="pill ok"><span class="dot"></span>OK</span>'
-        : '<span class="pill bad"><span class="dot"></span>FAIL ' + m.status + "</span>";
-      const cacheTag = m.cache === "hit" ? ' <span class="pill warn"><span class="dot"></span>缓存</span>' : "";
-      const input = String(m.input ?? "").slice(0, 40);
-      return `<div class="histitem">
-        ${audio}
-        <span class="name" title="${String(m.input ?? "").replace(/"/g, "&quot;")}">${input}</span>
-        <span class="meta">${m.ts ?? ""}</span>
-        ${status}${cacheTag}
-        <span class="meta">${fmtBytes(m.bytes ?? 0)} · 上游 ${m.upstream_ms ?? "?"}ms</span>
-        <button class="btn btn-danger" onclick="delHistory('${m.id}')">删</button>
-      </div>`;
-    }).join("");
-  } catch { list.innerHTML = '<div class="refgroup">历史读取失败</div>'; }
-}
-async function delHistory(id) {
-  if (!confirm("删除该条历史（含音频）？")) return;
-  await fetch("/api/history/" + id, { method: "DELETE" });
-  loadHistory();
-}
-
 /* ── 启动 ── */
-refreshAll();
-loadLibrary();
-loadRefLib();
-setInterval(refreshAll, 15000);
+async function init() {
+  await loadRefLib();
+  loadLibrary();
+  loadEmotions();
+  loadGroups();
+  refreshAll();
+  applyDefaultsToForm();
+  setInterval(refreshAll, 15000);
+}
+init();
 </script>
 </body>
 </html>

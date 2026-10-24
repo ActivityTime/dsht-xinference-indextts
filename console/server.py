@@ -392,6 +392,92 @@ def api_reflib_file(root: int, rel: str):
     return FileResponse(resolved, media_type="application/octet-stream", filename=resolved.name)
 
 
+# ────────────────────────── 配置文件（默认参数 / 情绪映射 / 音色分组） ──────────────────────────
+
+CONFIG_FILES = {
+    "settings": CONSOLE_DIR / "settings.json",        # 合成默认参数
+    "emotions": CONSOLE_DIR / "emotion_map.json",     # 情绪映射规则（关键词→向量/文字/音频）
+    "groups": CONSOLE_DIR / "voice_groups.json",      # 音色分组（同角色多情绪参考音频）
+}
+
+
+def _load_config(name: str, default):
+    path = CONFIG_FILES[name]
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        path.write_text(json.dumps(default, ensure_ascii=False, indent=1), encoding="utf-8")
+        return default
+
+
+def _save_config(name: str, value):
+    CONFIG_FILES[name].write_text(json.dumps(value, ensure_ascii=False, indent=1), encoding="utf-8")
+    logger.info("CONFIG SAVED %s", name)
+
+
+@app.get("/api/settings")
+def api_settings_get():
+    return _load_config("settings", {
+        "lang": "ZH", "speed": 1.0, "response_format": "wav", "emo_alpha": 1.0,
+        "auto_emotion": True,
+    })
+
+
+@app.post("/api/settings")
+async def api_settings_save(request: Request):
+    body = await request.json()
+    value = _load_config("settings", {})
+    for k in ("lang", "speed", "response_format", "emo_alpha", "auto_emotion"):
+        if k in body:
+            value[k] = body[k]
+    _save_config("settings", value)
+    return value
+
+
+@app.get("/api/emotions")
+def api_emotions_get():
+    return _load_config("emotions", {"rules": []})
+
+
+@app.post("/api/emotions")
+async def api_emotions_save(request: Request):
+    body = await request.json()
+    rules = body.get("rules", [])
+    for r in rules:
+        r["name"] = str(r.get("name", "")).strip()
+        r["keywords"] = [k.strip() for k in r.get("keywords", []) if str(k).strip()]
+        if r.get("action") not in ("vector", "text"):
+            r["action"] = "vector"
+        if r["action"] == "vector" and not isinstance(r.get("vector"), list):
+            r["vector"] = [0, 0, 0, 0, 0, 0, 0, 0]
+        if r["action"] == "text":
+            r["text"] = str(r.get("text", "")).strip()
+        r["alpha"] = min(1.0, max(0.0, float(r.get("alpha", 1.0))))
+    value = {"rules": rules}
+    _save_config("emotions", value)
+    return value
+
+
+@app.get("/api/groups")
+def api_groups_get():
+    return _load_config("groups", {"groups": []})
+
+
+@app.post("/api/groups")
+async def api_groups_save(request: Request):
+    body = await request.json()
+    groups = body.get("groups", [])
+    for g in groups:
+        g["name"] = str(g.get("name", "")).strip()
+        for m in g.get("members", []):
+            m["label"] = str(m.get("label", "")).strip()
+            m["root"] = int(m.get("root", 0))
+            m["rel"] = str(m.get("rel", "")).strip()
+    value = {"groups": groups}
+    _save_config("groups", value)
+    return value
+
+
 def main():
     import uvicorn
     logger.info("console starting: port=%d endpoint=%s model=%s",

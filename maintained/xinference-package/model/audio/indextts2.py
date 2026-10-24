@@ -171,6 +171,13 @@ class Indextts2:
 
         prompt_speech: Optional[bytes] = kwargs.pop("prompt_speech", None)
         emo_prompt_speech: Optional[bytes] = kwargs.pop("emo_prompt_speech", None)
+        # REST 层 kwargs 是 JSON 字符串，传不了 bytes；Web 控制台/客户端可走 base64
+        # 字段携带情感引导音频（音频引导情感 emo_audio_prompt 路径，功能不因传输层缺失）。
+        emo_prompt_b64: Optional[str] = kwargs.pop("emo_prompt_speech_b64", None)
+        if emo_prompt_speech is None and emo_prompt_b64:
+            import base64
+
+            emo_prompt_speech = base64.b64decode(emo_prompt_b64)
         emo_alpha: float = kwargs.pop("emo_alpha", 1.0)
         emo_text: Optional[str] = kwargs.pop("emo_text", None)
         use_random: bool = kwargs.pop("use_random", False)

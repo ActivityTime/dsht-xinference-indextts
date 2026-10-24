@@ -39,3 +39,6 @@ Thumbs.db
 .DS_Store
 .idea/
 .vscode/
+console/settings.json
+console/emotion_map.json
+console/voice_groups.json
