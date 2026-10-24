@@ -473,10 +473,20 @@ function renderRefLib() {
       <button class="btn btn-secondary btn-sm" onclick='useRef(${it.root},"${it.rel.replace(/\\/g, "\\\\")}")'>用作参考</button>
     </div>`).join("") + "</div>").join("");
 }
+function ensureOption(selId, value) {
+  if (!value) return;
+  const sel = $(selId);
+  if ([...sel.options].some((o) => o.value === value)) { sel.value = value; return; }
+  const it = refItems.find((x) => libValue(x) === value);
+  sel.insertAdjacentHTML("afterbegin",
+    `<option value="${esc(value)}">${esc(it ? libLabel(it) : value)}</option>`);
+  sel.value = value;
+}
 function useRef(root, rel) {
   $("ref-mode").value = "lib"; renderRefMode();
   $("tts-ref-filter").value = ""; renderTtsRefOptions();
-  $("tts-ref").value = root + "|" + rel; updateRefPreview();
+  ensureOption("tts-ref", root + "|" + rel);
+  updateRefPreview();
   document.querySelector('.nav-item[data-page="tts"]').click();
   toast("已选为参考音频：" + rel);
 }
@@ -853,18 +863,8 @@ async function applyDefaultsToForm() {
   $("tts-fmt").value = s.response_format ?? "wav";
   $("emo-alpha").value = s.emo_alpha ?? 1.0;
   $("emo-auto").checked = s.auto_emotion !== false;
-  // 音色来源（含选项缺失时手动注入：搜索过滤/400 条上限都可能截掉已存项）
+  // 音色来源（已存项可能被搜索过滤/条数上限截掉 → ensureOption 自动注入）
   $("ref-mode").value = s.ref_mode ?? "lib"; renderRefMode();
-  const ensureOption = (selId, value) => {
-    if (!value) return;
-    const sel = $(selId);
-    if (![...sel.options].some((o) => o.value === value)) {
-      const it = refItems.find((x) => libValue(x) === value);
-      sel.insertAdjacentHTML("afterbegin",
-        `<option value="${esc(value)}">${esc(it ? libLabel(it) : value)}</option>`);
-    }
-    sel.value = value;
-  };
   ensureOption("tts-ref", s.ref_lib);
   if (s.ref_group) {
     $("tts-group").value = s.ref_group;
