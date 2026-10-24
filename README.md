@@ -51,41 +51,57 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\start_xinference_indextts.ps1
 
 ---
 
+## 一键复原（拿到自维护部分后）
+
+本仓库只含**自维护部分**；`downloads\`（权重 + 两个 venv）全部可由可靠源一键重建，**需要下载的只有权重和 torch**（Xinference 不算可下载资产，随 pip 安装后由自维护覆盖接管）：
+
+```powershell
+# 1. 获取自维护部分（本仓库 / GitHub）
+git clone https://github.com/ActivityTime/dsht-xinference-indextts.git
+cd dsht-xinference-indextts
+
+# 2. 一键重建下载区（停全部 Xinference 进程；联网；权重≈10.5GB + wheel≈2.6GB）
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\rebuild_downloads.ps1
+
+# 3. 启动并验证（自动应用自维护覆盖 + 恢复 junction + 拉起守护监控）
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\start_xinference_indextts.ps1
+```
+
+`rebuild_downloads.ps1` 参数：`-Target all|weights|venv-main|venv-v4`（默认 all）、`-Force`（强制重建）。
+
+---
+
 ## 目录结构
 
 ```
-K:\SomeApps\Xinference\
-├─ start_xinference_indextts.ps1    # 一键启动：服务 + 加载 IndexTTS-2.5（外层唯一启动脚本）
-├─ start_xinference_indextts.bat    # 启动脚本的 .bat 封装
-├─ config.ps1                       # 中央配置（启动脚本依赖：内部路径相对定位、外部引用明文）
-├─ README.md                        # 本文件
-├─ .gitignore
-├─ scripts\                         # 工具脚本（均无绝对路径，读环境变量 / 相对定位）
-│  ├─ install.ps1                   # 安装脚本
-│  ├─ acl_fix.ps1                   # 应急工具：修复 System32 MSVC 运行库 ACL
-│  ├─ launch_indextts.py            # 用 RESTfulClient 传 model_config 加载模型
-│  └─ tts_test.py                   # 合成测试客户端
-├─ logs\                            # 运行/安装日志（git 忽略）
-│  └─ backup\                        # 补丁原文件回滚点 *.orig（git 跟踪）
-├─ 说明文档\                         # 使用文档 01-06 + 架构图 + README（05-外部引用与配置.md 含外部依赖明文清单）
-├─ 问题记录\                         # 排障/变更记录 问题记录.md（#1-#20，git 跟踪）
-├─ venv\                            # 虚拟环境（git 忽略，install.ps1 重建；其中 2 个补丁文件 add -f 单独跟踪）
-├─ .xinference\                     # 模型/数据/日志根（XINFERENCE_HOME，11.1GB，git 忽略；HF 下载缓存已清，离线模式）
-└─ downloads\                       # 官方 cu128 wheel（git 忽略，脚本自动重下）
+K:\SomeApps\Xinference\                  # 自维护区（git → GitHub: ActivityTime/dsht-xinference-indextts）
+├─ start_xinference_indextts.ps1/.bat    # 一键启动（9999 互斥锁 + 拉起守护监控）
+├─ rebuild_downloads.ps1                 # 一键重建下载区（权重 HF + torch cu128 官方索引 + pip 依赖）
+├─ config.ps1                            # 中央配置（内部路径相对定位、外部依赖明文）
+├─ README.md  .gitignore
+├─ maintained\                           # 自维护资产（git 跟踪，无外部源）
+│  ├─ requirements-venv-main.txt         # 主 venv 依赖清单（94 行，重建依据）
+│  ├─ requirements-venv-v4.txt           # v4 模型环境依赖清单（151 行，重建依据）
+│  └─ xinference-override\               # 改过的 Xinference 文件（无补丁概念；Sync-Maintained 覆盖用）
+├─ scripts\                              # launch_indextts.py / tts_test.py / monitor_indextts.py / install.ps1 / acl_fix.ps1
+├─ 说明文档\  问题记录\  logs\backup\     # 文档与回滚点（git 跟踪）
+├─ venv\            → junction → downloads\venv-main      # 主 venv（可下载区）
+├─ .xinference\     → cache/v2/IndexTTS-2_5 & virtualenv/v4 为 junction → downloads
+└─ downloads\                           # 可下载区（git 忽略；rebuild_downloads.ps1 一键重建）
+   ├─ models\IndexTTS-2.5\              # 模型权重（HF IndexTeam/IndexTTS-2.5）
+   ├─ venv-main\  venv-v4\              # 两个 venv（pip 重建）
+   └─ torch-*.whl                       # cu128 wheel（download.pytorch.org 重下）
 ```
 
 ## 版本追踪（git）
 
-本仓库用 **git** 管理（早期 commit `7c0c713` 安装/启动/排障；`85bbf83` 精简与资源优化快照）。
+本仓库用 **git** 管理并推送到 GitHub（`origin → github.com/ActivityTime/dsht-xinference-indextts`，main 分支）。
 
-- **跟踪**：脚本 `scripts/`、`config.ps1`、启动脚本、`说明文档\`、`问题记录\`、README、`.gitignore`、回滚点 `logs/backup/*.orig`，以及 **venv 里的 2 个补丁文件**（`add -f` 强制跟踪，见下）。
-- **忽略**：`venv/`（除补丁）、`.xinference/`、`downloads/`、`logs/`（除 backup）、运行时产物。
-- **补丁文件（升级会被覆盖，需重打）**：
-  - `venv\...\xinference\model\audio\indextts2.py`：#17 `empty_cache` + #19 移除旧版 IndexTTS2（`raise`）。
-  - `venv\...\xinference\thirdparty\indextts\infer_v2_5.py`：#17 `low_cpu_mem_usage` ×2 + semantic_model `bf16`。
-  - 原版：`logs/backup/*.orig`。
-- **查看/回滚**：`git log --oneline` 看变更；`git diff <commit> -- <file>` 看某次改动；回滚某补丁直接用对应 `.orig` 覆盖。
-- **约定**：此后**每一步变更/操作先文档化（写入 问题记录 + 对应文档）再 commit**。
+- **跟踪（自维护区）**：`maintained\`（两个 requirements + xinference-override 改过的文件）、`scripts\`、`config.ps1`、`rebuild_downloads.ps1`、启动脚本、`说明文档\`、`问题记录\`、README、`.gitignore`、回滚点 `logs/backup/*.orig`。
+- **忽略（可下载区）**：`downloads\`（权重/venv/wheel）、`.xinference\`、`logs\`（除 backup）、运行时产物（含 `.monitor.pid`）。
+- **无补丁概念**：我们改过的 Xinference 文件一律视为无外部源的自维护资产，副本存 `maintained\xinference-override\`，启动/重建时 `Sync-Maintained` 幂等覆盖到 venv（见 问题记录 #25/#26）。
+- **查看/回滚**：`git log --oneline`；`git diff <commit> -- <file>`；回滚改过的文件用 `maintained\xinference-override` 对应副本。
+- **约定**：此后**每一步变更/操作先文档化（写入 问题记录 + 对应文档）再 commit，再 push**。
 
 ## 关键配置（已确认可用）
 
