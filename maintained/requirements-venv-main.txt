@@ -89,6 +89,6 @@ tzdata==2026.5
 urllib3==2.8.0
 uv==0.13.5
 uvicorn==0.54.0
-xinference==4.0.1
+# xinference==4.0.1 已移除：Xinference 禁止下载，自维护版本由 maintained\xinference-package 恢复（问题记录 #27）
 xoscar==0.12.1
 yarl==1.25.1

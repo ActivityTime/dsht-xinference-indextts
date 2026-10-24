@@ -8,9 +8,9 @@
 #    - 可下载区 (downloads/) 全部可由可靠源一键重建:
 #       权重   -> HuggingFace IndexTeam/IndexTTS-2.5
 #       venv   -> pip (torch 系列走 PyTorch cu128 官方索引 download.pytorch.org)
-#    - 自维护区 (maintained/) 不在此脚本范围: 改过的 Xinference 文件(Sync-Maintained)、
-#      scripts、config、文档、git 均由 git 维护。
-#    - 重建后自动: 恢复 junction(venv/.xinference 指向)、应用 Sync-Maintained 自维护覆盖。
+#    - 自维护区 (maintained/) 不在此脚本范围: 自维护 Xinference 包(Sync-Maintained)、
+#      scripts、config、文档、git 均由 git 维护（Xinference 禁止下载，从仓库恢复）。
+#    - 重建后自动: 恢复 junction(venv/.xinference 指向)、恢复自维护 Xinference 包。
 #    - 重建前会自动停止全部 Xinference 进程(venv 被占用时无法删除/重建)。
 #  前提: base Python 3.13 (见 config.ps1 ExternalDeps)；联网(权重/依赖下载)。
 # =============================================================
@@ -30,7 +30,6 @@ $venvMainDir = Join-Path $downloads 'venv-main'
 $venvV4Dir   = Join-Path $downloads 'venv-v4\IndexTTS-2.5\default\3.13.15'
 $reqMain     = Join-Path $root 'maintained\requirements-venv-main.txt'
 $reqV4       = Join-Path $root 'maintained\requirements-venv-v4.txt'
-$overrideDir = Join-Path $root 'maintained\xinference-override'
 $basePy      = Join-Path $Script:ExternalDeps['BasePython313 (venv base_prefix, runtime)'] 'python.exe'
 $hfRepo      = 'IndexTeam/IndexTTS-2.5'
 $torchIndex  = 'https://download.pytorch.org/whl/cu128'
@@ -133,17 +132,16 @@ function Rebuild-VenvV4 {
     if ($ok) { Write-Step 'OK v4 环境重建完成' }
 }
 
-# ---------- 自维护覆盖: maintained -> venv site-packages ----------
+# ---------- 恢复自维护 Xinference 包: maintained\xinference-package -> venv site-packages ----------
+# Xinference 禁止下载（用户要求 #27）：本体是自维护资产（无外部源），从仓库恢复，不从 PyPI 安装。
 function Sync-Maintained {
-    if (-not (Test-Path -LiteralPath $overrideDir)) { Write-Step '[*] 无自维护覆盖目录，跳过'; return }
-    $pkgRoot = Join-Path $venvMainDir 'Lib\site-packages'
-    Get-ChildItem -LiteralPath $overrideDir -Recurse -File | ForEach-Object {
-        $rel = $_.FullName.Substring($overrideDir.Length).TrimStart('\')
-        $dst = Join-Path $pkgRoot $rel
-        New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
-        Copy-Item -LiteralPath $_.FullName -Destination $dst -Force
-    }
-    Write-Step 'OK 自维护 Xinference 覆盖已应用'
+    $srcPkg = Join-Path $root 'maintained\xinference-package'
+    if (-not (Test-Path -LiteralPath $srcPkg)) { Write-Step '[!] maintained\xinference-package 缺失，无法恢复 Xinference'; return }
+    $dstPkg = Join-Path $venvMainDir 'Lib\site-packages\xinference'
+    if (Test-Path -LiteralPath $dstPkg) { Remove-Item -LiteralPath $dstPkg -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path (Split-Path $dstPkg) | Out-Null
+    Copy-Item -LiteralPath $srcPkg -Destination $dstPkg -Recurse -Force
+    Write-Step 'OK 自维护 Xinference 包已恢复 (不下载)'
 }
 
 # ---------- 确保 junction（venv / cache / virtualenv 指向 downloads） ----------

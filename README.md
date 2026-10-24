@@ -53,7 +53,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\start_xinference_indextts.ps1
 
 ## 一键复原（拿到自维护部分后）
 
-本仓库只含**自维护部分**；`downloads\`（权重 + 两个 venv）全部可由可靠源一键重建，**需要下载的只有权重和 torch**（Xinference 不算可下载资产，随 pip 安装后由自维护覆盖接管）：
+本仓库只含**自维护部分**；`downloads\`（权重 + 两个 venv）全部可由可靠源一键重建。**需要下载的只有权重和 torch**；**Xinference 禁止下载**（本体在仓库 `maintained\xinference-package`，重建时整体恢复，不从 pip 安装）：
 
 ```powershell
 # 1. 获取自维护部分（本仓库 / GitHub）
@@ -80,9 +80,10 @@ K:\SomeApps\Xinference\                  # 自维护区（git → GitHub: Activi
 ├─ config.ps1                            # 中央配置（内部路径相对定位、外部依赖明文）
 ├─ README.md  .gitignore
 ├─ maintained\                           # 自维护资产（git 跟踪，无外部源）
-│  ├─ requirements-venv-main.txt         # 主 venv 依赖清单（94 行，重建依据）
-│  ├─ requirements-venv-v4.txt           # v4 模型环境依赖清单（151 行，重建依据）
-│  └─ xinference-override\               # 改过的 Xinference 文件（无补丁概念；Sync-Maintained 覆盖用）
+│  ├─ xinference-package\                # 自维护 Xinference 包（禁止下载，23MB，Sync-Maintained 整包恢复；
+│  │                                     #   thirdparty 已完全精简：#28 仅留 indextts+audiotools，2.3MB）
+│  ├─ requirements-venv-main.txt         # 主 venv 依赖清单（94 行，重建依据；不含 xinference）
+│  └─ requirements-venv-v4.txt           # v4 模型环境依赖清单（151 行，重建依据）
 ├─ scripts\                              # launch_indextts.py / tts_test.py / monitor_indextts.py / install.ps1 / acl_fix.ps1
 ├─ 说明文档\  问题记录\  logs\backup\     # 文档与回滚点（git 跟踪）
 ├─ venv\            → junction → downloads\venv-main      # 主 venv（可下载区）
@@ -97,9 +98,9 @@ K:\SomeApps\Xinference\                  # 自维护区（git → GitHub: Activi
 
 本仓库用 **git** 管理并推送到 GitHub（`origin → github.com/ActivityTime/dsht-xinference-indextts`，main 分支）。
 
-- **跟踪（自维护区）**：`maintained\`（两个 requirements + xinference-override 改过的文件）、`scripts\`、`config.ps1`、`rebuild_downloads.ps1`、启动脚本、`说明文档\`、`问题记录\`、README、`.gitignore`、回滚点 `logs/backup/*.orig`。
+- **跟踪（自维护区）**：`maintained\`（`xinference-package` 自维护 Xinference 包 + 两个 requirements）、`scripts\`、`config.ps1`、`rebuild_downloads.ps1`、启动脚本、`说明文档\`、`问题记录\`、README、`.gitignore`、回滚点 `logs/backup/*.orig`。
 - **忽略（可下载区）**：`downloads\`（权重/venv/wheel）、`.xinference\`、`logs\`（除 backup）、运行时产物（含 `.monitor.pid`）。
-- **无补丁概念**：我们改过的 Xinference 文件一律视为无外部源的自维护资产，副本存 `maintained\xinference-override\`，启动/重建时 `Sync-Maintained` 幂等覆盖到 venv（见 问题记录 #25/#26）。
+- **Xinference 禁止下载**：本体（含我们所有修改）整体存 `maintained\xinference-package\`，启动/重建时 `Sync-Maintained` 整包恢复到 venv（见 问题记录 #27）。
 - **查看/回滚**：`git log --oneline`；`git diff <commit> -- <file>`；回滚改过的文件用 `maintained\xinference-override` 对应副本。
 - **约定**：此后**每一步变更/操作先文档化（写入 问题记录 + 对应文档）再 commit，再 push**。
 

@@ -1,0 +1,191 @@
+# Copyright 2022-2026 Xinference Holdings Pte. Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import codecs
+import json
+import os
+import warnings
+
+from ..._model_catalog import load_model_catalog
+from ...constants import XINFERENCE_MODEL_DIR
+from ..utils import (
+    flatten_model_src,
+    flatten_quantizations,
+    prune_stale_derived_registries,
+)
+from .core import (
+    BUILTIN_IMAGE_MODELS,
+    IMAGE_MODEL_DESCRIPTIONS,
+    ImageModelFamilyV2,
+    generate_image_description,
+    get_image_model_descriptions,
+)
+from .custom import (
+    CustomImageModelFamilyV2,
+    get_user_defined_images,
+    register_image,
+    unregister_image,
+)
+from .engine import register_builtin_image_engines
+from .engine_family import IMAGE_ENGINES
+from .engine_family import (
+    generate_engine_config_by_model_name as generate_image_engine_config,
+)
+from .ocr import register_builtin_ocr_engines
+from .ocr.ocr_family import OCR_ENGINES, generate_engine_config_by_model_name
+
+
+def register_custom_model():
+    from ...constants import XINFERENCE_MODEL_DIR
+    from ..custom import migrate_from_v1_to_v2
+
+    # migrate from v1 to v2 first
+    migrate_from_v1_to_v2("image", CustomImageModelFamilyV2)
+
+    user_defined_image_dir = os.path.join(XINFERENCE_MODEL_DIR, "v2", "image")
+    if os.path.isdir(user_defined_image_dir):
+        for f in os.listdir(user_defined_image_dir):
+            try:
+                with codecs.open(
+                    os.path.join(user_defined_image_dir, f), encoding="utf-8"
+                ) as fd:
+                    user_defined_image_family = CustomImageModelFamilyV2.parse_obj(
+                        json.load(fd)
+                    )
+                    register_image(user_defined_image_family, persist=False)
+            except Exception as e:
+                warnings.warn(f"{user_defined_image_dir}/{f} has error, {e}")
+
+
+def _install():
+    # Install models with intelligent merging based on timestamps
+    from ..utils import install_models_with_merge
+
+    install_models_with_merge(
+        BUILTIN_IMAGE_MODELS,
+        "models",
+        "image",
+        "image_models.json",
+        has_downloaded_models,
+        load_model_family_from_json,
+    )
+
+    # register model description
+    for model_name, model_specs in BUILTIN_IMAGE_MODELS.items():
+        model_spec = [x for x in model_specs if x.model_hub == "huggingface"][0]
+        IMAGE_MODEL_DESCRIPTIONS.update(generate_image_description(model_spec))
+
+    register_builtin_image_engines()
+    register_builtin_ocr_engines()
+    new_image_engines = {}
+    new_ocr_engines = {}
+    for model_specs in BUILTIN_IMAGE_MODELS.values():
+        for model_spec in model_specs:
+            if model_spec.model_ability and "ocr" not in model_spec.model_ability:
+                generate_image_engine_config(model_spec, new_image_engines)
+            if model_spec.model_ability and "ocr" in model_spec.model_ability:
+                generate_engine_config_by_model_name(model_spec, new_ocr_engines)
+
+    register_custom_model()
+
+    user_defined_images = get_user_defined_images()
+    for ud_image in user_defined_images:
+        IMAGE_MODEL_DESCRIPTIONS.update(generate_image_description(ud_image))
+        if ud_image.model_ability and "ocr" not in ud_image.model_ability:
+            generate_image_engine_config(ud_image, new_image_engines)
+        if ud_image.model_ability and "ocr" in ud_image.model_ability:
+            generate_engine_config_by_model_name(ud_image, new_ocr_engines)
+
+    IMAGE_ENGINES.clear()
+    IMAGE_ENGINES.update(new_image_engines)
+    OCR_ENGINES.clear()
+    OCR_ENGINES.update(new_ocr_engines)
+
+    # A model present on a prior refresh but absent from this one must not keep
+    # advertising a launch config or description from the stale entry.
+    live_names = {name for name in BUILTIN_IMAGE_MODELS} | {
+        ud.model_name for ud in user_defined_images
+    }
+    prune_stale_derived_registries(live_names, IMAGE_MODEL_DESCRIPTIONS)
+
+
+def register_builtin_model():
+    """Register built-in image models."""
+    _install()
+
+
+def has_downloaded_models():
+    """Check if downloaded JSON configurations exist."""
+    builtin_dir = os.path.join(XINFERENCE_MODEL_DIR, "v2", "builtin", "image")
+    json_file_path = os.path.join(builtin_dir, "image_models.json")
+    return os.path.exists(json_file_path)
+
+
+def load_downloaded_models():
+    """Load downloaded JSON configurations from the builtin directory."""
+    builtin_dir = os.path.join(XINFERENCE_MODEL_DIR, "v2", "builtin", "image")
+    json_file_path = os.path.join(builtin_dir, "image_models.json")
+
+    try:
+        load_model_family_from_json(json_file_path, BUILTIN_IMAGE_MODELS)
+    except Exception as e:
+        warnings.warn(
+            f"Failed to load downloaded image models from {json_file_path}: {e}"
+        )
+        # Fall back to built-in models if download fails
+        load_model_family_from_json("models", BUILTIN_IMAGE_MODELS)
+
+
+def load_model_family_from_json(json_filename, target_families):
+    # Handle both relative (module directory) and absolute paths
+    if os.path.isabs(json_filename):
+        json_path = json_filename
+    else:
+        json_path = os.path.join(os.path.dirname(__file__), json_filename)
+
+    flattened_model_specs = []
+    for spec in load_model_catalog(json_path):
+        base_info = {
+            key: value
+            for key, value in spec.items()
+            if key not in ("model_src", "model_specs")
+        }
+        if "model_specs" in spec:
+            for model_spec in spec["model_specs"]:
+                spec_base = base_info.copy()
+                spec_base.update(
+                    {k: v for k, v in model_spec.items() if k != "model_src"}
+                )
+                if "model_src" in model_spec:
+                    spec_entry = spec_base.copy()
+                    spec_entry["model_src"] = model_spec["model_src"]
+                    if any(
+                        "quantizations" in hub_info
+                        for hub_info in model_spec["model_src"].values()
+                    ):
+                        flattened_model_specs.extend(flatten_quantizations(spec_entry))
+                    else:
+                        flattened_model_specs.extend(flatten_model_src(spec_entry))
+                else:
+                    flattened_model_specs.append(spec_base)
+        else:
+            flattened_model_specs.extend(flatten_model_src(spec))
+
+    for spec in flattened_model_specs:
+        if spec["model_name"] not in target_families:
+            target_families[spec["model_name"]] = [ImageModelFamilyV2(**spec)]
+        else:
+            target_families[spec["model_name"]].append(ImageModelFamilyV2(**spec))
+
+    del json_path

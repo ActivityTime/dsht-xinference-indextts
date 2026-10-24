@@ -75,23 +75,20 @@ if (Test-Health) {
     Write-Host '[OK] 服务就绪: ' $endpoint
 }
 
-# ---------- 1.5) 应用自维护覆盖 (maintained\xinference-override -> venv site-packages) ----------
-# 无补丁概念：我们改过的 Xinference 文件是无外部源的自维护资产，统一存 maintained\xinference-override，
-# 每次启动前幂等覆盖到 venv，确保运行的是自维护版（即使 venv 被 pip 重建也会被恢复）。
+# ---------- 1.5) 恢复自维护 Xinference 包 (maintained\xinference-package -> venv site-packages) ----------
+# Xinference 禁止下载（问题记录 #27）：本体是无外部源的自维护资产，从仓库整体恢复，不从 PyPI 安装。
+# 每次启动前幂等恢复，确保 venv 运行的是自维护版（即使 venv 被 pip 重建也会被恢复）。
 function Sync-Maintained {
-    $srcRoot = Join-Path $PSScriptRoot 'maintained\xinference-override'
-    if (-not (Test-Path -LiteralPath $srcRoot)) {
-        Write-Host '[*] 无自维护覆盖 (maintained\xinference-override 不存在)'
+    $srcPkg = Join-Path $PSScriptRoot 'maintained\xinference-package'
+    if (-not (Test-Path -LiteralPath $srcPkg)) {
+        Write-Host '[!] 自维护 Xinference 包缺失 (maintained\xinference-package 不存在)'
         return
     }
-    $pkgRoot = Join-Path $venvDir 'Lib\site-packages'
-    Get-ChildItem -LiteralPath $srcRoot -Recurse -File | ForEach-Object {
-        $rel = $_.FullName.Substring($srcRoot.Length).TrimStart('\')
-        $dst = Join-Path $pkgRoot $rel
-        New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
-        Copy-Item -LiteralPath $_.FullName -Destination $dst -Force
-    }
-    Write-Host '[OK] 自维护 Xinference 覆盖已应用'
+    $dstPkg = Join-Path $venvDir 'Lib\site-packages\xinference'
+    if (Test-Path -LiteralPath $dstPkg) { Remove-Item -LiteralPath $dstPkg -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path (Split-Path $dstPkg) | Out-Null
+    Copy-Item -LiteralPath $srcPkg -Destination $dstPkg -Recurse -Force
+    Write-Host '[OK] 自维护 Xinference 包已恢复 (不下载)'
 }
 Sync-Maintained
 

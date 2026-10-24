@@ -1,0 +1,1674 @@
+# Copyright 2022-2026 Xinference Holdings Pte. Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import functools
+import importlib.util
+import inspect
+import json
+import logging
+import os
+import time
+import typing
+import uuid
+from io import BytesIO
+from typing import (
+    Any,
+    AsyncGenerator,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
+
+from PIL import Image
+
+from ...types import (
+    ChatCompletion,
+    ChatCompletionChoice,
+    ChatCompletionChunk,
+    ChatCompletionChunkChoice,
+    ChatCompletionChunkDelta,
+    ChatCompletionLogprob,
+    ChatCompletionLogprobs,
+    ChatCompletionMessage,
+    ChatCompletionTopLogprob,
+    Completion,
+    CompletionChoice,
+    CompletionChunk,
+    CompletionLogprobs,
+    CompletionUsage,
+    ToolCallDelta,
+)
+from .core import chat_context_var
+from .media import load_media_bytes
+from .reasoning_parser import ReasoningParser
+from .tool_parsers.glm4_tool_parser import Glm4ToolParser
+
+logger = logging.getLogger(__name__)
+
+
+def _token_logprob_bytes(token: str) -> Optional[List[int]]:
+    """UTF-8 byte sequence of a logprob token, or ``None`` when not representable.
+
+    OpenAI encodes chat logprob tokens as their UTF-8 byte sequence; non-UTF-8
+    byte tokens surface as ``None`` so clients fall back to the token string.
+    """
+    if token is None:
+        return None
+    try:
+        return list(token.encode("utf-8"))
+    except (UnicodeEncodeError, AttributeError):
+        return None
+
+
+def _completion_logprobs_to_chat_logprobs(
+    logprobs: Optional[CompletionLogprobs],
+) -> Optional[ChatCompletionLogprobs]:
+    """Convert legacy parallel-list completion logprobs to the chat ``content[]`` shape.
+
+    vLLM emits ``/v1/completions`` logprobs in the legacy shape
+    (``text_offset`` / ``tokens`` / ``token_logprobs`` / ``top_logprobs`` parallel
+    lists); chat completions clients (``openai-python``) expect
+    ``logprobs.content[]`` with per-token ``token`` / ``bytes`` / ``logprob`` /
+    ``top_logprobs``. Surfacing the legacy shape on a chat choice leaves
+    ``choice.logprobs.content`` ``None`` for standard chat clients, so convert at
+    the chat builder boundary (both streaming and non-streaming, and through the
+    tool post-processors). ``None`` input (logprobs not requested/produced) passes
+    through as ``None``.
+    """
+    if logprobs is None:
+        return None
+    tokens = logprobs.get("tokens") or []
+    token_logprobs = logprobs.get("token_logprobs") or []
+    top_logprobs = logprobs.get("top_logprobs") or []
+    content: List[ChatCompletionLogprob] = []
+    for i, token in enumerate(tokens):
+        logprob = token_logprobs[i] if i < len(token_logprobs) else None
+        # The OpenAI chat-completions schema requires ``logprob: float`` on every
+        # ``content[]`` entry; ``openai-python`` rejects ``null`` (reproduced with
+        # 1.99.9: "Input should be a valid number"). The legacy
+        # ``token_logprobs`` carries ``None`` for tokens whose logprob was not
+        # computed (e.g. the first generated token in the legacy completion
+        # shape). Rather than emit a fabricated probability, skip those tokens so
+        # ``content[]`` reports only tokens whose logprob is actually known.
+        if logprob is None:
+            continue
+        raw_top = top_logprobs[i] if i < len(top_logprobs) else None
+        top_list: List[ChatCompletionTopLogprob] = []
+        if raw_top:
+            for top_token, top_logprob in raw_top.items():
+                top_list.append(
+                    {
+                        "token": top_token,
+                        "bytes": _token_logprob_bytes(top_token),
+                        "logprob": top_logprob,
+                    }
+                )
+        content.append(
+            {
+                "token": token,
+                "bytes": _token_logprob_bytes(token),
+                "logprob": logprob,
+                "top_logprobs": top_list,
+            }
+        )
+    return {"content": content}
+
+
+class MessageRoleOrderError(ValueError):
+    """A ``system`` message appeared at a non-first position on a chat template
+    that requires system-first ordering (e.g. the Qwen3 family)."""
+
+
+def check_system_role_order(messages: List) -> None:
+    """Raise ``MessageRoleOrderError`` if a ``system`` role appears at index > 0.
+
+    Callers must gate this on the model description's ``strict_system_first``
+    flag so lenient templates are never rejected (zero regression).
+    """
+    if not messages:
+        return
+    for idx, message in enumerate(messages):
+        if idx == 0:
+            continue
+        if isinstance(message, dict):
+            role = message.get("role")
+        else:
+            role = getattr(message, "role", None)
+        if role == "system":
+            raise MessageRoleOrderError(
+                "messages: this model's chat template requires the 'system' "
+                "role to be the first message; found a system message at "
+                f"position {idx}. Merge all system instructions into "
+                "messages[0]; for mid-conversation reminders/context use a "
+                "'user' role message; tool results must use the 'tool' role "
+                "with tool_call_id."
+            )
+
+
+_CONTEXT_LENGTH_KEYS: Tuple[str, ...] = (
+    "max_sequence_length",
+    "seq_length",
+    "max_position_embeddings",
+    "sliding_window",
+)
+
+
+def _get_config_value(config: Union[dict, Any], key: str) -> Any:
+    if isinstance(config, dict):
+        return config.get(key)
+    return getattr(config, key, None)
+
+
+def _collect_context_length_candidates(
+    config: Union[dict, Any], nested_attrs: Iterable[str]
+) -> List[int]:
+    candidates: List[int] = []
+    for key in _CONTEXT_LENGTH_KEYS:
+        value = _get_config_value(config, key)
+        if value is not None:
+            candidates.append(value)
+    for nested_attr in nested_attrs:
+        nested = _get_config_value(config, nested_attr)
+        if nested is not None:
+            candidates.extend(_collect_context_length_candidates(nested, nested_attrs))
+    return candidates
+
+
+def get_context_length_from_config(
+    config: Union[dict, Any], nested_attrs: Iterable[str] = ("text_config",)
+) -> int:
+    """
+    Determine a reasonable context length from model config dictionaries or
+    HuggingFace config objects.
+    """
+    candidates = _collect_context_length_candidates(config, nested_attrs)
+    if not candidates:
+        return 2048
+    return max(candidates)
+
+
+DEEPSEEK_TOOL_CALL_FAMILY: Set[str] = set()
+GEMMA_TOOL_CALL_FAMILY: Set[str] = set()
+GLM4_TOOL_CALL_FAMILY: Set[str] = set()
+LLAMA3_TOOL_CALL_FAMILY: Set[str] = set()
+QWEN_TOOL_CALL_FAMILY: Set[str] = set()
+GLM5_TOOL_CALL_FAMILY: Set[str] = set()
+KIMI_K3_TOOL_CALL_FAMILY: Set[str] = set()
+MINICPM5_TOOL_CALL_FAMILY: Set[str] = set()
+
+QWEN_TOOL_CALL_SYMBOLS = ["<tool_call>", "</tool_call>"]
+
+
+class ChatModelMixin:
+    def __init__(self):
+        # Only set attributes if they don't already exist
+        # to avoid overriding values set by parent classes
+        if not hasattr(self, "model_family"):
+            self.model_family = None
+        if not hasattr(self, "model_uid"):
+            self.model_uid = None
+        if not hasattr(self, "reasoning_parser"):
+            self.reasoning_parser = None
+        if not hasattr(self, "tool_parser"):
+            self.tool_parser = None
+
+    @staticmethod
+    def _sanitize_usage(usage: Any) -> Optional[CompletionUsage]:
+        """Normalize mapping- and object-style usage payloads."""
+        if usage is None:
+            return None
+
+        if isinstance(usage, dict):
+            usage_data = usage
+        else:
+            model_dump = getattr(usage, "model_dump", None)
+            dumped_usage = model_dump() if callable(model_dump) else None
+            if isinstance(dumped_usage, dict):
+                usage_data = dumped_usage
+            else:
+                usage_data = {
+                    key: getattr(usage, key, None)
+                    for key in (
+                        "prompt_tokens",
+                        "completion_tokens",
+                        "total_tokens",
+                        "prompt_tokens_details",
+                    )
+                }
+
+        required_keys = ("prompt_tokens", "completion_tokens", "total_tokens")
+        if any(usage_data.get(key) is None for key in required_keys):
+            return None
+
+        sanitized = CompletionUsage(
+            prompt_tokens=usage_data["prompt_tokens"],
+            completion_tokens=usage_data["completion_tokens"],
+            total_tokens=usage_data["total_tokens"],
+        )
+        prompt_tokens_details = usage_data.get("prompt_tokens_details")
+        if prompt_tokens_details is not None:
+            if not isinstance(prompt_tokens_details, dict):
+                details_dump = getattr(prompt_tokens_details, "model_dump", None)
+                dumped_details = details_dump() if callable(details_dump) else None
+                if isinstance(dumped_details, dict):
+                    prompt_tokens_details = dumped_details
+                else:
+                    prompt_tokens_details = {
+                        "cached_tokens": getattr(
+                            prompt_tokens_details, "cached_tokens", None
+                        )
+                    }
+            if prompt_tokens_details.get("cached_tokens") is not None:
+                sanitized["prompt_tokens_details"] = {
+                    "cached_tokens": prompt_tokens_details["cached_tokens"]
+                }
+        return sanitized
+
+    @staticmethod
+    @functools.lru_cache
+    def _compile_jinja_template(chat_template):
+        """
+        Copied from transformers source code.
+        """
+        try:
+            from jinja2.exceptions import TemplateError
+            from jinja2.sandbox import ImmutableSandboxedEnvironment
+        except ImportError:
+            raise ImportError("xinference requires jinja2 to be installed.")
+
+        def raise_exception(message):
+            raise TemplateError(message)
+
+        jinja_env = ImmutableSandboxedEnvironment(
+            trim_blocks=True,
+            lstrip_blocks=True,
+            extensions=["jinja2.ext.loopcontrols"],
+        )
+        jinja_env.globals["raise_exception"] = raise_exception
+        return jinja_env.from_string(chat_template)
+
+    @staticmethod
+    @functools.lru_cache(maxsize=64)
+    def _chat_template_needs_dict_arguments(chat_template: Optional[str]) -> bool:
+        # Detect templates that iterate tool-call arguments as a mapping.
+        # Content-driven (not name-driven) so future models copying this
+        # template style are covered automatically.
+        return chat_template is not None and (
+            "tool_call.arguments|items" in chat_template
+            or "tool_call.function.arguments is not mapping" in chat_template
+            or (
+                "args_dict = tool_call.arguments" in chat_template
+                and "args_dict.items()" in chat_template
+            )
+        )
+
+    @staticmethod
+    def _normalize_tool_call_arguments_to_dict(messages: List[Dict]) -> List[Dict]:
+        # OpenAI spec sends tool_calls.function.arguments as a JSON-encoded
+        # string, but Coder-style templates (Qwen3-Coder / qwen3.5 / qwen3.6)
+        # require a dict to iterate via `|items`. The HF Jinja sandbox does
+        # not register a `from_json` filter, so we normalize at the message
+        # layer before template rendering.
+        #
+        # Non-mutating: callers may reuse the input `messages` for history
+        # tracking / logging / serialization, so we deep-copy only the
+        # affected message + tool_call + function dict when a string
+        # argument is successfully parsed. Messages without string
+        # arguments are returned by reference (no copy).
+        normalized: List[Dict] = []
+        for message in messages:
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                normalized.append(message)
+                continue
+            tool_calls = message.get("tool_calls")
+            if not isinstance(tool_calls, list):
+                normalized.append(message)
+                continue
+            # Identify indices that need rewriting (string arguments that
+            # parse successfully into a JSON object). Malformed JSON and
+            # non-object JSON values (e.g. `"[]"`, `"null"`, `"1"`) are
+            # left as-is: the Qwen templates iterate `tool_call.arguments|items`
+            # which only works on mappings, so non-object values would still
+            # crash downstream — leaving them untouched lets the template
+            # surface the error naturally rather than masking it with a
+            # confusing type mismatch. This matches the contract of the
+            # existing `_normalize_tool_calls` helper.
+            rewrites: Dict[int, Dict] = {}
+            for i, tc in enumerate(tool_calls):
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function")
+                if not isinstance(fn, dict):
+                    continue
+                args = fn.get("arguments")
+                if not (isinstance(args, str) and args):
+                    continue
+                try:
+                    parsed = json.loads(args)
+                except json.JSONDecodeError:
+                    # leave as-is so downstream surfaces the malformed JSON
+                    continue
+                if not isinstance(parsed, dict):
+                    # JSON parsed but not an object (list / number / str /
+                    # null / bool). Leave the original string so the
+                    # template raises a clear error rather than silently
+                    # producing garbage.
+                    continue
+                rewrites[i] = {**fn, "arguments": parsed}
+            if not rewrites:
+                normalized.append(message)
+                continue
+            new_tool_calls = list(tool_calls)
+            for i, new_fn in rewrites.items():
+                original_tc = tool_calls[i]
+                new_tool_calls[i] = {**original_tc, "function": new_fn}
+            normalized.append({**message, "tool_calls": new_tool_calls})
+        return normalized
+
+    def _build_from_raw_template(
+        self, messages: List, chat_template: str, **kwargs
+    ) -> str:
+        compiled_template = self._compile_jinja_template(chat_template)
+        rendered = compiled_template.render(
+            messages=messages, add_generation_prompt=True, **kwargs
+        )
+        return rendered
+
+    def get_full_context(
+        self,
+        messages: List,
+        chat_template: Optional[str],
+        tokenizer=None,
+        tokenize=False,
+        **kwargs,
+    ):
+        normalization_template = chat_template
+        if normalization_template is None and tokenizer is not None:
+            normalization_template = getattr(tokenizer, "chat_template", None)
+        if self._chat_template_needs_dict_arguments(normalization_template):
+            messages = self._normalize_tool_call_arguments_to_dict(messages)
+        if (
+            "vision" not in self.model_family.model_ability
+            and "audio" not in self.model_family.model_ability
+        ):  # type: ignore
+            messages = self.convert_messages_with_content_list_to_str_conversion(
+                messages
+            )
+        if tokenizer is not None:
+            if self.model_family.model_name.lower().startswith("deepseek-v4"):
+                from ..utils import allow_trust_remote_code
+
+                if not allow_trust_remote_code(self.model_family):
+                    raise ValueError(
+                        "Loading this model executes code shipped in the model "
+                        "repository; set XINFERENCE_TRUST_REMOTE_CODE=1 to allow it."
+                    )
+                module = _load_deepseekv4_encoding_module(self.model_path)  # type: ignore
+
+                target_func = getattr(module, "encode_messages")
+
+                sig = inspect.signature(target_func)
+
+                if kwargs.get("enable_thinking", False):
+                    em_kwargs = {"thinking_mode": "thinking"}
+                else:
+                    em_kwargs = {"thinking_mode": "chat"}
+                tools = kwargs.pop("tools", None)
+                if tools:
+                    messages = self._attach_deepseekv4_tools(messages, tools)
+                for name in sig.parameters:
+                    if name in kwargs:
+                        em_kwargs[name] = kwargs.pop(name)
+
+                prompt = target_func(messages, **em_kwargs)
+
+                return prompt
+            else:
+                try:
+                    template_kwargs = {
+                        "tokenize": tokenize,
+                        "add_generation_prompt": True,
+                        **kwargs,
+                    }
+                    if chat_template is not None:
+                        template_kwargs["chat_template"] = chat_template
+                    full_context = tokenizer.apply_chat_template(
+                        messages, **template_kwargs
+                    )
+                    logger.debug("Prompt: %s", full_context)
+                    return full_context
+                except Exception as e:
+                    logger.warning(
+                        f"tokenizer.apply_chat_template error. Maybe this is an old model: {e}"
+                    )
+                    if chat_template is None:
+                        raise
+                    assert chat_template is not None
+                    return self._build_from_raw_template(
+                        messages, chat_template, **kwargs
+                    )
+        else:
+            # build from jinja
+            # Compilation function uses a cache to avoid recompiling the same template
+            if chat_template is None:
+                raise ValueError("chat_template is required when tokenizer is not set")
+            return self._build_from_raw_template(messages, chat_template, **kwargs)
+
+    @staticmethod
+    def _get_chat_template_kwargs_from_generate_config(
+        generate_config: Optional[Union[dict, Any]],
+        reasoning_parser: Optional[ReasoningParser] = None,
+    ) -> Optional[dict]:
+        if generate_config and "chat_template_kwargs" in generate_config:
+            kwargs = generate_config["chat_template_kwargs"]
+            if isinstance(kwargs, str):
+                try:
+                    kwargs = json.loads(kwargs)
+                except json.JSONDecodeError:
+                    raise TypeError(
+                        f"`chat_template_kwargs` should be json parsable, got: {kwargs}"
+                    )
+            if isinstance(kwargs, dict):
+                kwargs = dict(kwargs)
+                if reasoning_parser and "enable_thinking" not in kwargs:
+                    thinking = kwargs.get("thinking")
+                    kwargs["enable_thinking"] = (
+                        thinking
+                        if isinstance(thinking, bool)
+                        else reasoning_parser.enable_thinking
+                    )
+                return kwargs
+            else:
+                raise TypeError(
+                    f"`chat_template_kwargs` but be a JSON parsable str or dict, got: {kwargs}"
+                )
+        elif reasoning_parser:
+            # pass enable_thinking to chat template
+            return {"enable_thinking": reasoning_parser.enable_thinking}
+        return None
+
+    @staticmethod
+    def _attach_deepseekv4_tools(messages: List[Dict], tools: List[Dict]) -> List[Dict]:
+        prepared_messages = [dict(message) for message in messages]
+        for message in prepared_messages:
+            if message.get("role") in ("system", "developer"):
+                existing_tools = message.get("tools") or []
+                message["tools"] = [*existing_tools, *tools]
+                return prepared_messages
+        return [{"role": "system", "content": "", "tools": tools}, *prepared_messages]
+
+    @staticmethod
+    def convert_messages_with_content_list_to_str_conversion(
+        messages: List[Dict],
+    ) -> List[Dict]:
+        """
+        Handles messages with content list conversion, in order to support Cline, see GH#2659 .
+        """
+        for message in messages:
+            texts = ""
+            msg_content = message.get("content")
+            if msg_content:
+                if isinstance(msg_content, str):
+                    texts = msg_content
+                elif isinstance(msg_content, list):
+                    texts = "\n".join(item.get("text", "") for item in msg_content)
+            if texts:
+                message["content"] = texts
+        return messages
+
+    @staticmethod
+    def get_specific_prompt(model_family: str, messages: List[ChatCompletionMessage]):
+        """
+        Inspired by FastChat. Format chat history into a prompt according to the prompty style of
+        different models.
+        """
+        _messages = [x for x in messages]  # copy for not modifying the origin messages
+        _messages.append({"role": "assistant", "content": ""})
+
+        if "internvl" in model_family.lower():
+            system_prompt = (
+                messages[0]["content"] if messages[0]["role"] == "system" else ""
+            )
+            intra_message_sep = "<|im_end|>"
+            ret = (
+                "<s>"
+                if system_prompt == ""
+                else "<s><|im_start|>system\n"  # type: ignore
+                + system_prompt
+                + intra_message_sep
+                + "\n"
+            )
+            images = []  # type: ignore
+            for message in _messages:
+                role = "<|im_start|>" + message["role"]
+                content = message["content"]
+                if isinstance(content, str):
+                    if content:
+                        ret += role + "\n" + content + intra_message_sep + "\n"
+                    else:
+                        ret += role + "\n"
+                elif isinstance(content, list):
+                    text = ""
+                    image_urls = []
+                    for c in content:
+                        c_type = c.get("type")
+                        if c_type == "text":
+                            text = c["text"]
+                        elif c_type == "image_url":
+                            image_urls.append(c["image_url"]["url"])
+                    image_futures = []
+                    from concurrent.futures import ThreadPoolExecutor
+
+                    with ThreadPoolExecutor() as executor:
+                        for image_url in image_urls:
+                            fut = executor.submit(_decode_image, image_url)
+                            image_futures.append(fut)
+                    images.extend([fut.result() for fut in image_futures])
+                    if len(image_futures) == 0:
+                        ret += role + "\n" + text + intra_message_sep + "\n"
+                    else:
+                        placeholders = "\n".join(
+                            f"Image-{i + 1}: <image>\n"
+                            for i in range(
+                                len(images) - len(image_futures), len(images)
+                            )
+                        )
+                        ret += (
+                            role
+                            + "\n"
+                            + f"{placeholders}\n{text}"
+                            + intra_message_sep
+                            + "\n"
+                        )
+            if len(images) == 1:
+                ret = ret.replace("Image-1: <image>\n", "<image>\n")
+            return ret, images
+        else:
+            raise ValueError(f"Invalid model family: {model_family}")
+
+    @classmethod
+    def _to_chat_completion_chunk(
+        cls,
+        chunk: CompletionChunk,
+        reasoning_parser: Optional[ReasoningParser] = None,
+        previous_texts: Optional[List[str]] = None,
+        ensure_role: bool = False,
+    ) -> ChatCompletionChunk:
+        choices = chunk.get("choices")
+        if (
+            chunk.get("object") == "chat.completion.chunk"
+            and choices
+            and "delta" in choices[0]
+        ):
+            first_choice = cast(ChatCompletionChunkChoice, choices[0])
+            delta = first_choice["delta"]
+            if first_choice["finish_reason"] is None:
+                if reasoning_parser and reasoning_parser.check_content_parser():
+                    # process parsing reasoning content
+                    assert previous_texts is not None
+                    if text := delta.get("content"):
+                        current_text = previous_texts[-1] + text
+                        delta = reasoning_parser.extract_reasoning_content_streaming(
+                            previous_text=previous_texts[-1],
+                            current_text=current_text,
+                            delta_text=text,
+                        )
+                        previous_texts[-1] = current_text
+                        first_choice["delta"] = delta
+            elif first_choice["finish_reason"] is not None:
+                if "content" not in delta:
+                    delta["content"] = ""
+                if reasoning_parser and reasoning_parser.check_content_parser():
+                    delta["reasoning_content"] = None
+            if ensure_role:
+                if delta.get("role") is None:
+                    delta["role"] = "assistant"
+                if "content" not in delta:
+                    delta["content"] = None
+            if chunk.get("usage") is not None:
+                chunk["usage"] = cls._sanitize_usage(chunk.get("usage"))  # type: ignore
+            # Already a ChatCompletionChunk, we don't need to convert chunk.
+            return cast(ChatCompletionChunk, chunk)
+
+        choices_list: List[ChatCompletionChunkChoice] = []
+        for i, choice in enumerate(choices):  # type: ignore
+            delta = ChatCompletionChunkDelta()
+            if "text" in choice and choice["finish_reason"] is None:
+                if reasoning_parser and reasoning_parser.check_content_parser():
+                    assert previous_texts is not None
+                    current_text = previous_texts[-1] + choice["text"]
+                    delta = reasoning_parser.extract_reasoning_content_streaming(
+                        previous_text=previous_texts[-1],
+                        current_text=current_text,
+                        delta_text=choice["text"],
+                    )
+                    previous_texts[-1] = current_text
+                else:
+                    delta["content"] = choice["text"]
+            elif "text" in choice and choice["finish_reason"] is not None:
+                delta["content"] = choice["text"]
+                if reasoning_parser and reasoning_parser.check_content_parser():
+                    delta["reasoning_content"] = None
+            elif "tool_calls" in choice:
+                # CompletionChoice keeps its non-streaming public type for
+                # compatibility, while engine-provided chunks contain deltas.
+                delta["tool_calls"] = cast(List[ToolCallDelta], choice["tool_calls"])
+            choices_list.append(
+                {
+                    "index": i,
+                    "delta": delta,
+                    "logprobs": _completion_logprobs_to_chat_logprobs(
+                        choice.get("logprobs")
+                    ),
+                    "finish_reason": choice["finish_reason"],
+                }
+            )
+        assert choices is not None
+        usage = (
+            cls._sanitize_usage(chunk.get("usage"))
+            if choices and choices[0]["finish_reason"] is not None or not choices
+            else None
+        )
+        chat_chunk = {
+            "id": "chat" + chunk["id"],
+            "model": chunk["model"],
+            "created": chunk["created"],
+            "object": "chat.completion.chunk",
+            "choices": choices_list,
+            "usage": usage,
+        }
+        if ensure_role and choices_list:
+            first_delta: ChatCompletionChunkDelta = choices_list[0]["delta"]
+            if first_delta.get("role") is None:
+                first_delta["role"] = "assistant"
+            if "content" not in first_delta:
+                first_delta["content"] = None
+        return cast(ChatCompletionChunk, chat_chunk)
+
+    @classmethod
+    def _get_first_chat_completion_chunk(
+        cls,
+        chunk: CompletionChunk,
+        reasoning_parser: Optional[ReasoningParser] = None,
+    ) -> List[ChatCompletionChunk]:
+        choices_list: List[ChatCompletionChunkChoice] = []
+        chunks: List[ChatCompletionChunk] = []
+        for i, choice in enumerate(chunk["choices"]):
+            delta = ChatCompletionChunkDelta(role="assistant", content="")
+            if reasoning_parser and reasoning_parser.check_content_parser():
+                delta["content"] = None
+                delta["reasoning_content"] = ""
+            choices_list.append(
+                ChatCompletionChunkChoice(
+                    index=i,
+                    delta=delta,
+                    finish_reason=None,
+                )
+            )
+        chat_chunk = ChatCompletionChunk(
+            id="chat" + chunk["id"],
+            model=chunk["model"],
+            created=chunk["created"],
+            object="chat.completion.chunk",
+            choices=choices_list,
+        )
+        chunks.append(chat_chunk)
+        if reasoning_parser:
+            chunks.extend(reasoning_parser.prepare_first_reasoning_content_chunk(chunk))
+        return chunks
+
+    @classmethod
+    def _get_chat_completion_chunk_id(
+        cls,
+        chunk: CompletionChunk,
+        fallback_chunk: Optional[CompletionChunk] = None,
+    ) -> str:
+        source_chunk: Dict[str, Any] = cast(
+            Dict[str, Any], chunk if chunk.get("id") else fallback_chunk or {}
+        )
+        chunk_id = source_chunk.get("id")
+        if not chunk_id:
+            return f"chatcmpl-{uuid.uuid4()}"
+        chunk_id = str(chunk_id)
+        if source_chunk.get("object") == "chat.completion.chunk":
+            return chunk_id
+        return "chat" + chunk_id
+
+    @classmethod
+    def _get_final_chat_completion_chunk(
+        cls,
+        chunk: CompletionChunk,
+        fallback_chunk: Optional[CompletionChunk] = None,
+    ) -> ChatCompletionChunk:
+        fallback: Dict[str, Any] = cast(Dict[str, Any], fallback_chunk or {})
+        chat_chunk: Dict[str, Any] = {
+            "id": cls._get_chat_completion_chunk_id(chunk, fallback_chunk),
+            "model": chunk.get("model") or fallback.get("model") or "",
+            "created": chunk.get("created")
+            or fallback.get("created")
+            or int(time.time()),
+            "object": "chat.completion.chunk",
+            "choices": [
+                ChatCompletionChunkChoice(
+                    index=0, delta=ChatCompletionChunkDelta(), finish_reason="stop"
+                )
+            ],
+        }
+        usage = cls._sanitize_usage(chunk.get("usage"))
+        if usage is not None:
+            chat_chunk["usage"] = usage
+        return cast(ChatCompletionChunk, chat_chunk)
+
+    @classmethod
+    def _get_usage_chat_completion_chunk(
+        cls,
+        chunk: CompletionChunk,
+        fallback_chunk: Optional[CompletionChunk] = None,
+    ) -> ChatCompletionChunk:
+        fallback: Dict[str, Any] = cast(Dict[str, Any], fallback_chunk or {})
+        chat_chunk: Dict[str, Any] = {
+            "id": cls._get_chat_completion_chunk_id(chunk, fallback_chunk),
+            "model": chunk.get("model") or fallback.get("model") or "",
+            "created": chunk.get("created")
+            or fallback.get("created")
+            or int(time.time()),
+            "object": "chat.completion.chunk",
+            "choices": [],
+        }
+        usage = cls._sanitize_usage(chunk.get("usage"))
+        if usage is not None:
+            chat_chunk["usage"] = usage
+        return cast(ChatCompletionChunk, chat_chunk)
+
+    @classmethod
+    def _to_chat_completion_chunks(
+        cls,
+        chunks: Iterator[CompletionChunk],
+        reasoning_parse: Optional[ReasoningParser] = None,
+    ) -> Iterator[ChatCompletionChunk]:
+        previous_texts = [""]
+        is_first_chunk = True
+        fallback_chunk: Optional[CompletionChunk] = None
+        if reasoning_parse:
+            chunks = reasoning_parse.prepare_reasoning_content_sync(chunks)
+        for _, chunk in enumerate(chunks):
+            # usage
+            choices = chunk.get("choices")
+            if not choices:
+                # Fallback: convert plain content to choices for streaming
+                content = cast(Optional[str], chunk.get("content"))
+                if content is not None:
+                    finish_reason = cast(Optional[str], chunk.get("finish_reason"))
+                    chunk = chunk.copy()
+                    chunk["choices"] = [
+                        CompletionChoice(
+                            index=0,
+                            text=content,
+                            logprobs=None,
+                            finish_reason=finish_reason,
+                        )
+                    ]
+                    choices = chunk["choices"]
+                elif chunk.get("usage") is not None:
+                    yield cls._get_usage_chat_completion_chunk(chunk, fallback_chunk)
+                    continue
+                else:
+                    yield cls._get_final_chat_completion_chunk(chunk, fallback_chunk)
+                    continue
+
+            r = cls._to_chat_completion_chunk(
+                chunk, reasoning_parse, previous_texts, ensure_role=is_first_chunk
+            )
+            is_first_chunk = False
+            fallback_chunk = chunk
+            yield r
+
+    @classmethod
+    def _tools_to_messages_for_deepseek(
+        cls, messages: List[dict], tools: Iterable[dict]
+    ):
+        # deepseek integrates tool calls into messages
+        # we follow the chat template rule to integrate tools into messages
+        tool_call_message: Dict[str, Any] = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [],
+        }
+
+        for tool in tools:
+            function_name = tool["function"]["name"]
+            parameters = tool["function"].get("parameters", {}).get("properties", {})
+            function_args_json = json.dumps(parameters)
+
+            tool_call_message["tool_calls"].append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": function_name,
+                        "arguments": function_args_json,
+                    },
+                }
+            )
+
+        messages.append(tool_call_message)
+
+    @classmethod
+    async def _async_to_chat_completion_chunks(
+        cls,
+        chunks: AsyncGenerator[CompletionChunk, None],
+        reasoning_parser: Optional[ReasoningParser] = None,
+        ctx: Optional[Dict[str, Any]] = None,
+    ) -> AsyncGenerator[ChatCompletionChunk, None]:
+        def set_context():
+            if ctx:
+                chat_context_var.set(ctx)
+
+        previous_texts = [""]
+        full_text = ""
+        is_first_chunk = True
+        fallback_chunk: Optional[CompletionChunk] = None
+        upstream_chunks = chunks
+        try:
+            # Process chunks
+            if reasoning_parser:
+                set_context()
+                chunks = reasoning_parser.prepare_reasoning_content_streaming(chunks)
+            async for chunk in chunks:
+                set_context()
+                choices = chunk.get("choices")
+                if not choices:
+                    # usage
+                    if chunk.get("usage") is not None:
+                        chat_chunk = cls._get_usage_chat_completion_chunk(
+                            chunk, fallback_chunk
+                        )
+                    else:
+                        chat_chunk = cls._get_final_chat_completion_chunk(
+                            chunk, fallback_chunk
+                        )
+                else:
+                    if choices[0].get("text"):
+                        full_text += choices[0]["text"]  # type: ignore
+
+                    chat_chunk = cls._to_chat_completion_chunk(
+                        chunk,
+                        reasoning_parser,
+                        previous_texts,
+                        ensure_role=is_first_chunk,
+                    )
+                    fallback_chunk = chunk
+                    is_first_chunk = False
+                yield chat_chunk
+            logger.debug("Chat finished, output: %s", full_text)
+        finally:
+            # async for does not close its iterator when this conversion
+            # generator is closed early.  Close the original model stream
+            # explicitly so engines can release the request immediately.
+            await upstream_chunks.aclose()
+
+    @staticmethod
+    def _to_chat_completion(
+        completion: Completion, reasoning_parser: Optional[ReasoningParser] = None
+    ) -> ChatCompletion:
+        # prepare reasoning content
+        if reasoning_parser:
+            completion = reasoning_parser.prepare_reasoning_content(completion)
+
+        if completion.get("object") == "chat.completion" and completion.get("choices"):
+            # Already a ChatCompletion
+            for choice in completion["choices"]:
+                message = choice["message"]  # type: ignore
+                text = message["content"]  # Original content from the message
+
+                if reasoning_parser and reasoning_parser.check_content_parser():
+                    # Parse into reasoning and content parts
+                    (
+                        reasoning_val,
+                        content_val,
+                    ) = reasoning_parser.extract_reasoning_content(text)
+                    message["content"] = content_val
+                    if reasoning_val is not None:
+                        message["reasoning_content"] = reasoning_val
+            return cast(ChatCompletion, completion)
+
+        choices = []
+        for i, choice in enumerate(completion["choices"]):
+            content = choice["text"]
+            reasoning_content = None
+
+            if reasoning_parser and reasoning_parser.check_content_parser():
+                reasoning_content, content = reasoning_parser.extract_reasoning_content(  # type: ignore
+                    choice
+                )
+
+            message = {"role": "assistant", "content": content}
+
+            # add only reasoning_content is None
+            if reasoning_content is not None:
+                message["reasoning_content"] = reasoning_content
+
+            choices.append(
+                {
+                    "index": i,
+                    "message": message,
+                    "logprobs": _completion_logprobs_to_chat_logprobs(
+                        choice.get("logprobs")
+                    ),
+                    "finish_reason": choice["finish_reason"],
+                }
+            )
+        return {
+            "id": "chat" + completion["id"],
+            "object": "chat.completion",
+            "created": completion["created"],
+            "model": completion["model"],
+            "choices": choices,  # type: ignore
+            "usage": completion["usage"],
+        }
+
+    def _post_process_completion_chunk(
+        self,
+        model_family,
+        model_uid,
+        c,
+        chunk_id=None,
+        previous_texts: List[str] = [""],
+        tool_call_state: Optional[Dict[str, Any]] = None,
+    ):
+        if not c.get("choices"):
+            return c
+        _id = chunk_id if chunk_id is not None else str(uuid.uuid4())
+        tool_result = None
+        finish_reason = None
+        if isinstance(self.tool_parser, Glm4ToolParser):
+            tool_result = self.tool_parser.extract_tool_calls_streaming(
+                [],
+                c,
+                c,
+            )
+        else:
+            finish_reason = c["choices"][0]["finish_reason"]
+            delta_text = c["choices"][0]["delta"].get("content") or ""
+            current_text = (
+                previous_texts[-1] + delta_text if previous_texts else delta_text
+            )
+            tool_result = self.tool_parser.extract_tool_calls_streaming(
+                previous_texts,
+                current_text,
+                delta_text,
+            )
+            previous_texts[-1] = current_text
+        if tool_result is None and not finish_reason:
+            return None
+        tool_calls: List[Dict[str, Any]] = []
+        failed_contents = []
+        if isinstance(tool_result, list):
+            tool_results = tool_result
+        elif tool_result is not None:
+            tool_results = [tool_result]
+        else:
+            tool_results = []
+        ignored_incomplete_tool_call = False
+        for tool_event in tool_results:
+            if len(tool_event) == 4:
+                parsed_content, func, args, tool_call_index = tool_event
+                if func and tool_call_state is not None and tool_call_index is not None:
+                    tool_call_state["next_index"] = max(
+                        tool_call_state.get("next_index", 0), tool_call_index + 1
+                    )
+            else:
+                parsed_content, func, args = tool_event
+                tool_call_index = None
+            if func and tool_call_index is None:
+                if tool_call_state is None:
+                    tool_call_index = len(tool_calls)
+                else:
+                    tool_call_index = tool_call_state.get("next_index", 0)
+                    tool_call_state["next_index"] = tool_call_index + 1
+            if func:
+                # A caller without streaming state cannot reuse the same call ID
+                # when the completed arguments arrive. Preserve its historical
+                # one-shot behavior instead of finalizing an empty placeholder.
+                if args is None and tool_call_state is None:
+                    ignored_incomplete_tool_call = True
+                    continue
+                call_id = f"call_{str(uuid.uuid4())}"
+                function_name: Optional[str] = func
+                include_metadata = True
+                if tool_call_state is not None:
+                    call_ids = tool_call_state.setdefault("call_ids", {})
+                    call_id = call_ids.setdefault(tool_call_index, call_id)
+                    sent_names = tool_call_state.setdefault("sent_names", set())
+                    if tool_call_index in sent_names:
+                        function_name = None
+                    else:
+                        sent_names.add(tool_call_index)
+                    sent_metadata = tool_call_state.get("sent_metadata")
+                    if sent_metadata is None:
+                        sent_metadata = tool_call_state["sent_metadata"] = set()
+                    include_metadata = tool_call_index not in sent_metadata
+                    if include_metadata:
+                        sent_metadata.add(tool_call_index)
+
+                function_delta: Dict[str, Any] = {
+                    "arguments": (
+                        "" if args is None else json.dumps(args, ensure_ascii=False)
+                    )
+                }
+                if function_name is not None:
+                    function_delta["name"] = function_name
+                tool_call_delta: Dict[str, Any] = {
+                    "index": tool_call_index,
+                    "function": function_delta,
+                }
+                if include_metadata:
+                    tool_call_delta["id"] = call_id
+                    tool_call_delta["type"] = "function"
+                tool_calls.append(tool_call_delta)
+            elif parsed_content:
+                failed_contents.append(parsed_content)
+
+        if (
+            ignored_incomplete_tool_call
+            and not tool_calls
+            and not failed_contents
+            and not finish_reason
+        ):
+            return None
+
+        if tool_calls:
+            if tool_call_state is None:
+                # Keep compatibility with one-shot streaming callers.
+                finish_reason = "tool_calls"
+            else:
+                tool_call_state["seen"] = True
+        if finish_reason == "stop" and tool_call_state and tool_call_state.get("seen"):
+            finish_reason = "tool_calls"
+
+        content = "".join(failed_contents) if failed_contents else None
+
+        d = {
+            "role": "assistant",
+            "content": content if content else "",
+            "tool_calls": tool_calls,
+        }
+
+        # For tool completion chunks, use None for usage, actual values for stop
+        if finish_reason == "tool_calls":
+            usage = None
+        else:
+            usage = self._sanitize_usage(c.get("usage"))
+        return {
+            "id": "chat" + f"cmpl-{_id}",
+            "model": model_uid,
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": d,
+                    # The streaming tool-completion helpers already converted
+                    # legacy completion logprobs to the chat ``content[]`` shape
+                    # via `_to_chat_completion_chunk`; pass it through unchanged
+                    # here so a real logprob is not collapsed to ``{"content": []}``.
+                    "logprobs": c["choices"][0].get("logprobs"),
+                    "finish_reason": finish_reason,
+                }
+            ],
+            "usage": usage,
+        }
+
+    def _post_process_completion(
+        self,
+        model_family,
+        model_uid,
+        c,
+    ):
+        if not self.tool_parser:
+            return self._get_final_chat_completion_chunk(c)
+
+        _id = str(uuid.uuid4())
+        reasoning_content = None
+        content = ""
+
+        # First, process reasoning content if reasoning parser exists
+        text = c["choices"][0]["text"]
+        if self.reasoning_parser and self.reasoning_parser.check_content_parser():
+            # Extract reasoning content directly from the original text
+            reasoning_content, processed_content = (
+                self.reasoning_parser.extract_reasoning_content(text)
+            )
+            # Use the processed content (without thinking tags) for tool parsing.
+            # It is empty when the output only contains reasoning, e.g. when
+            # generation stops inside the thinking block.
+            text = processed_content or ""
+
+        # Then, extract tool calls from the processed text (without thinking tags)
+        tool_calls = []
+        failed_contents = []
+        if isinstance(self.tool_parser, Glm4ToolParser):
+            tool_result = self.tool_parser.extract_tool_calls(c)
+        else:
+            tool_result = self.tool_parser.extract_tool_calls(text)
+
+        # Process tool results
+        for tool_content, func, args in tool_result:
+            if func:
+                tool_calls.append(
+                    {
+                        "id": f"call_{str(uuid.uuid4())}",
+                        "type": "function",
+                        "function": {
+                            "name": func,
+                            "arguments": json.dumps(args, ensure_ascii=False),
+                        },
+                    }
+                )
+            else:
+                if tool_content:
+                    failed_contents.append(tool_content)
+
+        # Determine the final content
+        if tool_calls:
+            # For tool calls, the main content should be empty or contain only non-tool parts
+            content = "".join(failed_contents) if failed_contents else ""
+        else:
+            # For non-tool calls, use the processed content from reasoning parser
+            content = text
+
+        finish_reason = (
+            "tool_calls"
+            if tool_calls
+            else c["choices"][0].get("finish_reason") or "stop"
+        )
+
+        m = {
+            "role": "assistant",
+            "content": content,
+            "tool_calls": tool_calls,
+        }
+        # add only reasoning_content is None
+        if reasoning_content is not None:
+            m["reasoning_content"] = reasoning_content
+
+        # For tool completion chunks, use actual usage values when available
+        usage = self._sanitize_usage(c.get("usage"))
+        if not usage or not isinstance(usage, dict) or "prompt_tokens" not in usage:
+            usage = {
+                "prompt_tokens": -1,
+                "completion_tokens": -1,
+                "total_tokens": -1,
+            }
+        return {
+            "id": "chat" + f"cmpl-{_id}",
+            "model": model_uid,
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "choices": [
+                {
+                    "index": 0,
+                    "message": m,
+                    "logprobs": _completion_logprobs_to_chat_logprobs(
+                        c["choices"][0].get("logprobs")
+                    ),
+                    "finish_reason": finish_reason,
+                }
+            ],
+            "usage": usage,
+        }
+
+    def _transform_messages(
+        self,
+        messages: Union[List[ChatCompletionMessage], List[dict]],
+    ):
+        transformed_messages = []
+        for msg in messages:
+            new_content = []
+            content = msg.get("content")
+            if isinstance(content, str):
+                new_content.append({"type": "text", "text": content})
+            elif isinstance(content, List):
+                for item in content:  # type: ignore
+                    if "text" in item:
+                        new_content.append({"type": "text", "text": item["text"]})
+                    elif "image_url" in item:
+                        new_content.append(
+                            {"type": "image", "image": item["image_url"]["url"]}
+                        )
+                    elif "video_url" in item:
+                        new_content.append(
+                            {"type": "video", "video": item["video_url"]["url"]}
+                        )
+                    elif "audio_url" in item:
+                        new_content.append(
+                            {"type": "audio", "audio": item["audio_url"]["url"]}
+                        )
+                    else:
+                        logger.warning(
+                            "Unknown message type, message: %s, this message may be ignored",
+                            msg,
+                        )
+            new_message = dict(msg)
+            if msg.get("tool_calls") is not None:
+                new_message["tool_calls"] = self._normalize_tool_calls(
+                    msg["tool_calls"]
+                )
+            new_message["content"] = new_content if new_content else None
+            transformed_messages.append(new_message)
+
+        return transformed_messages
+
+    @staticmethod
+    def _normalize_tool_calls(tool_calls: Any) -> Any:
+        if isinstance(tool_calls, (str, bytes)):
+            return tool_calls
+        if isinstance(tool_calls, dict):
+            tool_calls = [tool_calls]
+        try:
+            normalized_tool_calls = list(tool_calls)
+        except TypeError:
+            return tool_calls
+
+        for index, tool_call in enumerate(normalized_tool_calls):
+            if not isinstance(tool_call, dict):
+                continue
+
+            normalized_tool_call = dict(tool_call)
+            function = normalized_tool_call.get("function")
+            if isinstance(function, dict) and "arguments" in function:
+                target = dict(function)
+                is_function_target = True
+            else:
+                target = normalized_tool_call
+                is_function_target = False
+            arguments = target.get("arguments")
+
+            if isinstance(arguments, (str, bytes)):
+                if not arguments or not arguments.strip():
+                    arguments = {}
+                else:
+                    try:
+                        arguments = json.loads(arguments)
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(
+                            "Tool call arguments must be a valid JSON object"
+                        ) from exc
+            elif arguments is not None and not isinstance(arguments, dict):
+                try:
+                    arguments = dict(arguments)
+                except (TypeError, ValueError) as exc:
+                    raise TypeError(
+                        "Tool call arguments must be a mapping or JSON object string"
+                    ) from exc
+
+            if arguments is not None and not isinstance(arguments, dict):
+                raise TypeError("Tool call arguments must decode to a JSON object")
+
+            if "arguments" in target:
+                target["arguments"] = arguments
+            if is_function_target:
+                normalized_tool_call["function"] = target
+            normalized_tool_calls[index] = normalized_tool_call
+
+        return normalized_tool_calls
+
+    @staticmethod
+    def _split_reasoning_tool_chunk(
+        chat_chunk: ChatCompletionChunk,
+    ) -> Tuple[Optional[ChatCompletionChunk], Optional[ChatCompletionChunk]]:
+        """Split a delta that crosses from reasoning into tool-call content."""
+        if not chat_chunk.get("choices"):
+            return None, chat_chunk
+
+        choice = chat_chunk["choices"][0]
+        delta = choice["delta"]
+        reasoning_content = delta.get("reasoning_content")
+        if reasoning_content is None:
+            return None, chat_chunk
+
+        content = delta.get("content")
+        if not content:
+            return chat_chunk, None
+
+        reasoning_choices = list(chat_chunk["choices"])
+        reasoning_choices[0] = cast(
+            ChatCompletionChunkChoice,
+            {
+                **choice,
+                "delta": {**delta, "content": None},
+            },
+        )
+        content_choices = list(chat_chunk["choices"])
+        content_choices[0] = cast(
+            ChatCompletionChunkChoice,
+            {
+                **choice,
+                "delta": {**delta, "reasoning_content": None},
+            },
+        )
+        return (
+            cast(ChatCompletionChunk, {**chat_chunk, "choices": reasoning_choices}),
+            cast(ChatCompletionChunk, {**chat_chunk, "choices": content_choices}),
+        )
+
+    def _to_tool_completion_chunks(
+        self,
+        chunks: Iterator[CompletionChunk],
+        ctx: Optional[Dict[str, Any]] = None,
+    ) -> Iterator[ChatCompletionChunk]:
+        def set_context():
+            if ctx:
+                chat_context_var.set(ctx)
+
+        previous_texts = [""]
+        previous_tools_texts = [""]
+        tool_call_state: Dict[str, Any] = {"seen": False}
+        fallback_chunk: Optional[CompletionChunk] = None
+        if self.reasoning_parser:
+            set_context()
+            chunks = self.reasoning_parser.prepare_reasoning_content_sync(chunks)
+        choice_chunk_idx = 0
+        for completion_chunk in chunks:
+            set_context()
+            if not completion_chunk.get("choices"):
+                if completion_chunk.get("usage") is not None:
+                    yield self._get_usage_chat_completion_chunk(
+                        completion_chunk, fallback_chunk
+                    )
+                else:
+                    yield self._get_final_chat_completion_chunk(
+                        completion_chunk, fallback_chunk
+                    )
+                continue
+
+            fallback_chunk = completion_chunk
+            chat_chunk = self._to_chat_completion_chunk(
+                completion_chunk,
+                self.reasoning_parser,
+                previous_texts,
+                ensure_role=choice_chunk_idx == 0,
+            )
+            choice_chunk_idx += 1
+            reasoning_chunk, tool_chunk = self._split_reasoning_tool_chunk(chat_chunk)
+            if reasoning_chunk is not None:
+                yield reasoning_chunk
+            if tool_chunk is None:
+                continue
+            processed_chunk = self._post_process_completion_chunk(
+                self.model_family,
+                self.model_uid,
+                tool_chunk,
+                previous_texts=previous_tools_texts,
+                tool_call_state=tool_call_state,
+            )
+            if processed_chunk:
+                yield processed_chunk
+
+    async def _async_to_tool_completion_chunks(
+        self,
+        chunks: AsyncGenerator[CompletionChunk, None],
+        ctx: Optional[Dict[str, Any]] = None,
+    ) -> AsyncGenerator[ChatCompletionChunk, None]:
+        def set_context():
+            if ctx:
+                chat_context_var.set(ctx)
+
+        i = 0
+        previous_texts = [""]
+        previous_tools_texts = [""]
+        tool_call_state: Dict[str, Any] = {"seen": False}
+        full_text = ""
+        fallback_chunk: Optional[CompletionChunk] = None
+        upstream_chunks = chunks
+        try:
+            if self.reasoning_parser:
+                set_context()
+                chunks = self.reasoning_parser.prepare_reasoning_content_streaming(
+                    chunks
+                )
+            async for completion_chunk in chunks:
+                set_context()
+                if not completion_chunk.get("choices"):
+                    if completion_chunk.get("usage") is not None:
+                        yield self._get_usage_chat_completion_chunk(
+                            completion_chunk, fallback_chunk
+                        )
+                    else:
+                        yield self._get_final_chat_completion_chunk(
+                            completion_chunk, fallback_chunk
+                        )
+                    continue
+
+                fallback_chunk = completion_chunk
+                chat_chunk = self._to_chat_completion_chunk(
+                    completion_chunk,
+                    self.reasoning_parser,
+                    previous_texts,
+                    ensure_role=i == 0,
+                )
+                i += 1
+                reasoning_chunk, tool_chunk = self._split_reasoning_tool_chunk(
+                    chat_chunk
+                )
+                if reasoning_chunk is not None:
+                    yield reasoning_chunk
+                if tool_chunk is None:
+                    continue
+                processed_chunk = self._post_process_completion_chunk(
+                    self.model_family,
+                    self.model_uid,
+                    tool_chunk,
+                    previous_texts=previous_tools_texts,
+                    tool_call_state=tool_call_state,
+                )
+                if processed_chunk:
+                    yield processed_chunk
+            logger.debug("Chat finished, output: %s", full_text)
+        finally:
+            # Keep request cleanup deterministic when the converted tool stream
+            # is closed before the model stream is exhausted.
+            await upstream_chunks.aclose()
+
+
+def get_model_version(
+    model_name: str,
+    model_format: str,
+    model_size_in_billions: Union[str, int],
+    quantization: str,
+) -> str:
+    return f"{model_name}--{model_size_in_billions}B--{model_format}--{quantization}"
+
+
+def _decode_image(_url):
+    return _decode_image_without_rgb(_url).convert("RGB")
+
+
+def _decode_image_without_rgb(_url):
+    return Image.open(BytesIO(load_media_bytes(_url)))
+
+
+@typing.no_type_check
+def generate_completion_chunk(
+    chunk_text: Optional[str],
+    finish_reason: Optional[str],
+    chunk_id: str,
+    model_uid: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    total_tokens: int,
+    has_choice: bool = True,
+    has_content: bool = True,
+):
+    choices = []
+    if has_choice:
+        choices.append(
+            CompletionChoice(
+                text=chunk_text, index=0, logprobs=None, finish_reason=finish_reason
+            )
+            if has_content
+            else CompletionChoice(index=0, logprobs=None, finish_reason=finish_reason)
+        )
+    return CompletionChunk(
+        id=chunk_id,
+        object="text_completion",
+        created=int(time.time()),
+        model=model_uid,
+        choices=choices,
+        usage=CompletionUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+        ),
+    )
+
+
+def generate_completion(
+    model_uid: str,
+    response: str,
+    prompt_tokens=-1,
+    completion_tokens=-1,
+    total_tokens=-1,
+    finish_reason="stop",
+) -> Completion:
+    return Completion(
+        id=str(uuid.uuid1()),
+        object="text_completion",
+        created=int(time.time()),
+        model=model_uid,
+        choices=[
+            CompletionChoice(
+                text=response, index=0, logprobs=None, finish_reason=finish_reason
+            )
+        ],
+        usage=CompletionUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+        ),
+    )
+
+
+def generate_chat_completion(
+    model_uid: str,
+    response: str,
+    prompt_tokens=-1,
+    completion_tokens=-1,
+    total_tokens=-1,
+    finish_reason="stop",
+) -> ChatCompletion:
+    return ChatCompletion(
+        id="chat" + str(uuid.uuid1()),
+        object="chat.completion",
+        created=int(time.time()),
+        model=model_uid,
+        choices=[
+            ChatCompletionChoice(
+                index=0,
+                message={"role": "assistant", "content": response},
+                finish_reason=finish_reason,
+            )
+        ],
+        usage=CompletionUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+        ),
+    )
+
+
+@functools.lru_cache
+def get_stop_token_ids_from_config_file(model_path: str) -> Optional[List[int]]:
+    from transformers import GenerationConfig as TransformersGenerationConfig
+
+    try:
+        transformers_config = TransformersGenerationConfig.from_pretrained(model_path)
+        if transformers_config.eos_token_id is not None:
+            stop_token_ids = (
+                transformers_config.eos_token_id
+                if isinstance(transformers_config.eos_token_id, list)
+                else [transformers_config.eos_token_id]
+            )
+            return stop_token_ids
+        return None
+    except OSError as e:
+        logger.warning(
+            "Failed to load model config from path %s: %s. Stop tokens will not be applied.",
+            model_path,
+            e,
+        )
+        return None
+
+
+def normalize_response_format(
+    response_format: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """
+    Normalize OpenAI-style response_format into a simple dict.
+    Returns:
+        None if missing/unsupported, or a dict with keys:
+            - type: "json_schema" | "json_object"
+            - schema_dict: dict (only for json_schema)
+    """
+    if not response_format or not isinstance(response_format, dict):
+        return None
+
+    fmt_type = response_format.get("type")
+    if fmt_type not in ("json_schema", "json_object"):
+        return None
+
+    normalized: Dict[str, Any] = {"type": fmt_type}
+    if fmt_type == "json_schema":
+        schema_block = response_format.get("json_schema") or {}
+        schema_dict = schema_block.get("schema_") or schema_block.get("schema")
+        if schema_dict:
+            normalized["schema_dict"] = schema_dict
+    return normalized
+
+
+def parse_messages(messages: List[Dict]) -> Tuple:
+    """
+    Some older models still follow the old way of parameter passing.
+    This function helps to parse out the needed information from OpenAI-compatible `messages`.
+    """
+    system_messages = [mess["content"] for mess in messages if mess["role"] == "system"]
+    content_messages = [mess for mess in messages if mess["role"] != "system"]
+    prompt = content_messages[-1]["content"]
+    system_prompt = ". ".join(system_messages) if system_messages else None
+    chat_history = content_messages[:-1]
+    return prompt, system_prompt, chat_history
+
+
+@functools.lru_cache
+def _load_deepseekv4_encoding_module(model_path: str):
+    module_path = os.path.join(
+        model_path,
+        "encoding",
+        "encoding_dsv4.py",  # type: ignore
+    )
+    if not os.path.exists(module_path):
+        raise FileNotFoundError(
+            f"Missing {module_path}.Please verify the model repository files."
+        )
+    spec = importlib.util.spec_from_file_location("encoding_dsv4", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Failed to load encoding_dsv4 module from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module

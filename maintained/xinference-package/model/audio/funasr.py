@@ -1,0 +1,231 @@
+# Copyright 2022-2026 Xinference Holdings Pte. Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import logging
+import tempfile
+from typing import TYPE_CHECKING, List, Optional
+
+from ...core.exceptions import InvalidAudioInputError
+from ...device_utils import get_available_device, is_device_available
+
+if TYPE_CHECKING:
+    from .core import AudioModelFamilyV2
+
+logger = logging.getLogger(__name__)
+
+
+class FunASRModel:
+    def __init__(
+        self,
+        model_uid: str,
+        model_path: str,
+        model_spec: "AudioModelFamilyV2",
+        device: Optional[str] = None,
+        **kwargs,
+    ):
+        self.model_family = model_spec
+        self._model_uid = model_uid
+        self._model_path = model_path
+        self._model_spec = model_spec
+        self._device = device
+        self._model = None
+        self._kwargs = kwargs
+
+    @property
+    def model_ability(self):
+        return self._model_spec.model_ability
+
+    @staticmethod
+    def _empty_transcription_response(response_format: str):
+        if response_format == "json":
+            return {"text": ""}
+        if response_format == "verbose_json":
+            return {
+                "task": "transcribe",
+                "text": "",
+                "duration": 0,
+                "words": [],
+                "segments": [],
+            }
+        raise ValueError(f"Unsupported response format: {response_format}")
+
+    def convert_to_openai_format(self, input_data):
+        text = input_data.get("text", "")
+        timestamps = input_data.get("timestamp")
+        try:
+            has_timestamps = timestamps is not None and len(timestamps) > 0
+        except TypeError:
+            has_timestamps = False
+
+        if not has_timestamps:
+            return {
+                "task": "transcribe",
+                "text": text,
+                "duration": 0,
+                "words": [],
+                "segments": [],
+            }
+
+        try:
+            normalized_timestamps = [
+                (float(timestamp[0]), float(timestamp[1]))
+                for timestamp in timestamps
+                if timestamp is not None and len(timestamp) >= 2
+            ]
+        except (TypeError, ValueError):
+            normalized_timestamps = []
+
+        if not normalized_timestamps:
+            logger.warning(
+                "FunASR returned invalid or empty timestamps for model_uid=%s",
+                self._model_uid,
+            )
+            return {
+                "task": "transcribe",
+                "text": text,
+                "duration": 0,
+                "words": [],
+                "segments": [],
+            }
+
+        start_time = normalized_timestamps[0][0] / 1000
+        end_time = normalized_timestamps[-1][1] / 1000
+        duration = end_time - start_time
+        word_timestamps = [
+            {"start": start / 1000, "end": end / 1000}
+            for start, end in normalized_timestamps
+        ]
+        output = {
+            "task": "transcribe",
+            "duration": duration,
+            "text": text,
+            "words": word_timestamps,
+            "segments": [],
+        }
+        for sentence in input_data.get("sentence_info") or []:
+            seg_start = sentence["start"] / 1000
+            seg_end = sentence["end"] / 1000
+            output["segments"].append(
+                {
+                    "id": len(output["segments"]),
+                    "start": seg_start,
+                    "end": seg_end,
+                    "text": sentence["text"],
+                    "speaker": sentence["spk"],
+                }
+            )
+
+        return output
+
+    def load(self):
+        try:
+            from funasr import AutoModel
+        except ImportError:
+            error_message = "Failed to import module 'funasr'"
+            installation_guide = [
+                "Please make sure 'funasr' is installed. ",
+                "You can install it by `pip install funasr`\n",
+            ]
+
+            raise ImportError(f"{error_message}\n\n{''.join(installation_guide)}")
+
+        if self._device is None:
+            self._device = get_available_device()
+        else:
+            if not is_device_available(self._device):
+                raise ValueError(f"Device {self._device} is not available!")
+
+        kwargs = (
+            self._model_spec.default_model_config.copy()
+            if getattr(self._model_spec, "default_model_config", None)
+            else {}
+        )
+        kwargs.update(self._kwargs)
+        logger.debug("Loading FunASR model with kwargs: %s", kwargs)
+        self._model = AutoModel(model=self._model_path, device=self._device, **kwargs)
+
+    def transcriptions(
+        self,
+        audio: bytes,
+        language: Optional[str] = None,
+        prompt: Optional[str] = None,
+        response_format: str = "json",
+        temperature: float = 0,
+        timestamp_granularities: Optional[List[str]] = None,
+        **kwargs,
+    ):
+        if not audio:
+            raise InvalidAudioInputError("Invalid audio file: audio is empty.")
+        if response_format not in ("json", "verbose_json"):
+            raise ValueError(f"Unsupported response format: {response_format}")
+
+        from funasr.utils.postprocess_utils import rich_transcription_postprocess
+
+        if temperature != 0:
+            raise RuntimeError("`temperature`is not supported for FunASR")
+        if timestamp_granularities is not None:
+            raise RuntimeError("`timestamp_granularities`is not supported for FunASR")
+        if prompt is not None:
+            logger.warning(
+                "Prompt for funasr transcriptions will be ignored: %s", prompt
+            )
+
+        language = "auto" if language is None else language
+
+        with tempfile.NamedTemporaryFile(buffering=0) as f:
+            f.write(audio)
+
+            kw = (
+                self._model_spec.default_transcription_config.copy()  # type: ignore
+                if getattr(self._model_spec, "default_transcription_config", None)
+                else {}
+            )
+            kw.update(kwargs)
+            logger.debug("Calling FunASR model with kwargs: %s", kw)
+            result = self._model.generate(  # type: ignore
+                input=f.name, cache={}, language=language, **kw
+            )
+            if not isinstance(result, list):
+                raise RuntimeError(f"FunASR returned invalid result: {result}")
+            if not result:
+                logger.info(
+                    "FunASR detected no speech for model_uid=%s", self._model_uid
+                )
+                return self._empty_transcription_response(response_format)
+            if not isinstance(result[0], dict):
+                raise RuntimeError(f"Invalid result[0] from FunASR: {result[0]}")
+            if "text" not in result[0]:
+                raise RuntimeError(f"Missing 'text' field in result[0]: {result[0]}")
+            text = rich_transcription_postprocess(result[0]["text"])
+
+            if response_format == "json":
+                return {"text": text}
+            elif response_format == "verbose_json":
+                verbose = result[0]
+                verbose["text"] = text
+                return self.convert_to_openai_format(verbose)
+            raise AssertionError(
+                f"Unexpected validated response format: {response_format}"
+            )
+
+    def translations(
+        self,
+        audio: bytes,
+        language: Optional[str] = None,
+        prompt: Optional[str] = None,
+        response_format: str = "json",
+        temperature: float = 0,
+        timestamp_granularities: Optional[List[str]] = None,
+    ):
+        raise RuntimeError("FunASR does not support translations API")
