@@ -331,12 +331,14 @@ async def api_tts_adapter(request: Request):
         group = None
         group_consumed = set()
         for seg in voice_parts:
-            g = next((g for g in groups_all
-                      if g.get("name") and g.get("name") in seg), None)
-            if g is not None:
+            # 命中分组名的候选中取最长名（「露娜的伤心音色」优先于短名「伤心音色」，
+            # 避免子串包含关系下短名分组抢中）；命中段一律不再参与标签匹配
+            cands = [g for g in groups_all
+                     if g.get("name") and g.get("name") in seg]
+            if cands:
                 group_consumed.add(seg)  # 命中分组名的段一律不再参与标签匹配
                 if group is None:
-                    group = g  # 多个命中取第一个
+                    group = max(cands, key=lambda g: len(g.get("name", "")))  # 多个命中取第一个出现的段，段内取最长名
         matched_member = None
         if group is not None:
             remaining = [seg for seg in voice_parts if seg not in group_consumed]
