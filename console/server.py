@@ -259,38 +259,35 @@ DSH_INSTRUCTION_RE = re.compile(
     r"(?:(?:说|讲|念|朗读|读)\s*)?(?:这?句话?|这句话|这句|话)?\s*[。.！!？?]?\s*")
 
 
+def rules_for_adapter():
+    return api_emotions_get().get("rules", [])
+
+
 @app.post("/v1/audio/speech")
 @app.post("/api/tts/adapter")
 async def api_tts_adapter(request: Request):
-    # 标准端点：OpenAI JSON 载体（DSHT/通用客户端）与 xinference multipart 载体
-    # （prompt_speech 文件）都接受——适配层是为 API 准备的，两条路行为完全一致。
-    """OpenAI 适配层（语义逐条对齐，#38 起分模式定义）。
+    """OpenAI 适配层（语义逐条对齐：#38 文字情感 / #45 引导音频 / #37 切换音色）。
 
-    请求字段：model(忽略,路由本机模型) / input(纯正文) / instructions / voice /
+    请求字段：model(忽略+模式关键词,路由本机模型) / input(纯正文) / instructions / voice /
     response_format / speed / kwargs(xinference 扩展 JSON) / prompt_speech 文件。
 
-    【文字情感 text_emotion】（#38 第 1 条）：
-      - voice：逗号分段。首个命中分组名的段确定分组（多个命中取第一个）；
-        其余段与分组**成员情绪标签**做子串匹配，确定用分组中哪个音色（未命中用默认成员）；
-        命中分组名的段不再参与标签匹配。
-      - instructions：整段作为文字情感描述（emo_text）。
-      - 情绪映射表在该模式不参与（既不匹配 voice，也不注入情感）。
-      - 内联 #[模式][参数]（instructions/voice/input 任意字段）优先级最高，发送前剔除。
+    【文字情感 text_emotion】（#38-41）：
+      voice 逗号分段 → 首个含分组名的段定分组（整段消费，不再匹配标签）→ 其余段与成员标签
+      单向子串匹配（标签 ⊆ 词组，按成员顺序=优先级，首个命中定音色，未命中用默认成员）；
+      instructions 整段作为文字情感描述；映射表不参与。
 
-    【guide_audio / group_switch】保持 #37 语义（见下方分支实现）。
-    优先级：内联 > 调用方显式 kwargs > 模式默认行为。
+    【引导音频 guide_audio】（#45）：
+      音色分组优先从 voice 取（同上匹配），回退 instructions；情绪标签优先从 instructions 取
+      （剥「用X的语气」壳 + 映射短语），然后 voice 剩余段与 instructions **拼接**按分组标签
+      优先级再筛一遍；prompt_speech 恒取分组默认成员；emo_prompt_speech_b64 取标签命中
+      成员的音频；未命中标签 → 都用默认、不注入。
+
+    【切换音色 group_switch】（#37）：voice 段/instructions 情绪标签命中组内成员 → 切该成员
+    音色，情感跟随；组内无命中但映射规则有动作时注入。
+
+    优先级：内联 #[模式][参数] > 调用方显式 kwargs > 模式默认行为。
     """
-    ctype = request.headers.get("content-type", "")
-    if "application/json" in ctype:
-        body = await request.json()
-        data = {}
-        for k, v in body.items():
-            data[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
-        files = {}
-        ref_info = {"source": "json", "rel": None, "name": None, "sha256": None}
-    else:
-        # multipart（xinference 形态）与 urlencoded（curl -d / requests data=）都走表单解析
-        data, files, ref_info = await _read_form(request)
+    data, files, ref_info = await _read_form(request)
     report = {"residual": None, "tag": "", "instruction": "", "emotion": None,
               "voice_resolved": None, "stripped": [], "inline": {}, "mode": None,
               "model": {"in": str(data.get("model") or ""), "used": MODEL_NAME}}
@@ -324,7 +321,7 @@ async def api_tts_adapter(request: Request):
 
         data[fname] = INLINE_RE.sub(_sub, t).strip()
 
-    # ── 1) 模式判定（提前：voice/instructions 的解析方式取决于模式）──
+    # ── 1) 模式判定（提前：解析方式取决于模式；model 关键词可覆盖）──
     mode = _load_config("settings", {}).get("adapter_mode", "text_emotion")
     if mode not in ("text_emotion", "guide_audio", "group_switch"):
         mode = "text_emotion"
@@ -347,6 +344,8 @@ async def api_tts_adapter(request: Request):
     explicit_emo = any(k in kwargs for k in ("emo_vector", "use_emo_text", "emo_prompt_speech_b64"))
     explicit_ref = bool(files.get("prompt_speech"))
     groups_all = _load_config("groups", {"groups": []}).get("groups", [])
+    voice_parts = [seg.strip() for seg in re.split(r"[，,]", voice)
+                   if seg.strip() and seg.strip() != "default"]
 
     def _member_audio(mm):
         roots = _load_library()
@@ -357,37 +356,33 @@ async def api_tts_adapter(request: Request):
                 return path
         return None
 
-    # ── 2) 分支：文字情感（#38 第 1 条） ──
-    if mode == "text_emotion":
-        # voice：逗号分段 → 首个命中分组名的段定分组；其余段与成员标签子串匹配定音色
-        voice_parts = [seg.strip() for seg in re.split(r"[，,]", voice)
-                       if seg.strip() and seg.strip() != "default"]
-        group = None
-        group_consumed = set()
-        for seg in voice_parts:
-            # 命中分组名的候选中取最长名（「露娜的伤心音色」优先于短名「伤心音色」，
-            # 避免子串包含关系下短名分组抢中）；命中段一律不再参与标签匹配
-            cands = [g for g in groups_all
-                     if g.get("name") and g.get("name") in seg]
+    def _group_from(segments_text):
+        """「分组名 ⊆ 段」匹配，段内候选取最长名；返回 (group, consumed_segs)。"""
+        g_found, consumed = None, set()
+        for seg in segments_text:
+            cands = [g for g in groups_all if g.get("name") and g.get("name") in seg]
             if cands:
-                group_consumed.add(seg)  # 命中分组名的段一律不再参与标签匹配
-                if group is None:
-                    group = max(cands, key=lambda g: len(g.get("name", "")))  # 多个命中取第一个出现的段，段内取最长名
+                consumed.add(seg)
+                if g_found is None:
+                    g_found = max(cands, key=lambda g: len(g.get("name", "")))
+        return g_found, consumed
+
+    # ════ 分支 A：文字情感（#38-41） ════
+    if mode == "text_emotion":
+        group, group_consumed = _group_from(voice_parts)
         matched_member = None
         if group is not None:
             remaining = [seg for seg in voice_parts if seg not in group_consumed]
             # 按分组内标签顺序（优先级）遍历：首个在任一剩余词组中命中的标签即确认
-            # （用户例：标签序【不好笑】【笑】【伤心】时，「她很伤心」在前的词组不赢，
-            #   优先级更高的【不好笑】命中「这一点也不好笑」胜出）
             for mm in group.get("members", []):
                 label = str(mm.get("label", ""))
                 if not label:
                     continue
                 ll = label.lower()
-                if any(ll in seg.lower() or seg.lower() in ll for seg in remaining):
+                # 单向子串：标签 ⊆ 词组（标签整体匹配、不分词）；反向不成立
+                if any(ll in seg.lower() for seg in remaining):
                     matched_member = mm
                     break
-        # 音色：命中的成员，未命中用分组默认成员
         default_member = next((mm for mm in (group or {}).get("members", []) if mm.get("is_default")), None) \
             or ((group or {}).get("members") or [None])[0]
         chosen = matched_member or default_member
@@ -434,8 +429,80 @@ async def api_tts_adapter(request: Request):
                 status_code=400)
         return await _proxy_tts(data, files, ref_info, adapter_report=report)
 
-    # ── 3) 分支：guide_audio / group_switch（#37 语义保持） ──
-    # 情绪词来源：instructions 剥壳 + voice 段命中映射短语 + 内联情绪标签
+    # ════ 分支 B：引导音频（#45） ════
+    if mode == "guide_audio":
+        # 分组：voice 优先（「分组名 ⊆ 段」），回退 instructions 全文
+        group, group_consumed = _group_from(voice_parts)
+        if group is None and instructions:
+            g2, _ = _group_from([instructions])
+            group = g2
+        members = (group or {}).get("members", [])
+        default_member = next((mm for mm in members if mm.get("is_default")), None) \
+            or (members[0] if members else None)
+        # 情绪标签：instructions 优先（剥壳词 + 映射短语命中）→ 拼接文本按标签优先级再筛
+        tag = overrides.get("tag", "")
+        word = ""
+        if instructions:
+            m2 = DSH_INSTRUCTION_RE.match(instructions)
+            word = m2.group(1) if m2 else instructions
+            tag = tag or word
+            report["instruction"] = word or instructions
+        # voice 剩余段与 instructions 拼接，按标签优先级（成员顺序）筛一遍
+        combined = "，".join(seg for seg in voice_parts if seg not in group_consumed)
+        combined = (combined + "，" + instructions).strip("，")
+        tagged_member = next((mm for mm in members
+                              if str(mm.get("label", "")).lower() == tag.lower()), None) if tag else None
+        if tagged_member is None and members:
+            for mm in members:
+                label = str(mm.get("label", ""))
+                if label and label.lower() in combined.lower():
+                    tagged_member = mm
+                    if not tag:
+                        tag = label
+                    break
+        report["tag"] = tag
+        hit = _match_emotion_rule(rules_for_adapter(), combined, prefer_tag=tag) if combined else None
+        # 音色：恒为分组默认成员
+        chosen = default_member
+        if chosen is not None and not explicit_ref:
+            path = _member_audio(chosen)
+            if path is not None:
+                files["prompt_speech"] = (path.name, path.read_bytes(), "application/octet-stream")
+                ref_info = {"source": "group", "rel": str(chosen.get("rel", "")),
+                            "name": voice, "sha256": _sha256_file(path)[:16]}
+                report["voice_resolved"] = f"{group.get('name', voice)} · {chosen.get('label', '')}（默认成员）"
+        # 引导音频：标签命中成员的音频；未命中 → 映射规则回退；再无 → 不注入（都用默认）
+        if not explicit_emo and tagged_member is not None:
+            gp = _member_audio(tagged_member)
+            if gp is not None:
+                kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
+                report["emotion"] = {"source": "guide_audio", "audio": gp.name, "label": tagged_member.get("label")}
+        elif not explicit_emo and tagged_member is None and hit is not None \
+                and hit.get("action") in ("vector", "text", "audio") \
+                and not any(k in kwargs for k in ("emo_vector", "use_emo_text", "emo_prompt_speech_b64")):
+            if hit["action"] == "vector":
+                kwargs["emo_vector"] = hit.get("vector") or [0, 0, 0, 0, 0, 0, 0, 0]
+            elif hit["action"] == "text":
+                kwargs["use_emo_text"] = True
+                kwargs["emo_text"] = hit.get("text", "")
+            else:
+                roots = _load_library()
+                rr = str(hit.get("audio", "")).split("|", 1)
+                if len(rr) == 2 and 0 <= int(rr[0] or 0) < len(roots):
+                    gp = Path(roots[int(rr[0])]["path"]) / rr[1]
+                    if gp.is_file():
+                        kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
+        data["input"] = (text.strip() or str(data.get("input") or "").strip())
+        report["residual"] = data["input"]
+        kwargs.setdefault("language", "ZH")
+        data["kwargs"] = json.dumps(kwargs, ensure_ascii=False)
+        if not files.get("prompt_speech"):
+            return JSONResponse(
+                {"detail": "OpenAI 适配：voice 未命中音色分组且未上传 prompt_speech，无法合成", "report": report},
+                status_code=400)
+        return await _proxy_tts(data, files, ref_info, adapter_report=report)
+
+    # ════ 分支 C：切换音色（#37 语义保持） ════
     tag = overrides.get("tag", "")
     if instructions:
         m2 = DSH_INSTRUCTION_RE.match(instructions)
@@ -446,8 +513,6 @@ async def api_tts_adapter(request: Request):
         if mi and mi.group(1) == word:
             text = text[mi.end():]
             report["stripped"].append({"kind": "instruction-echo", "value": word})
-    voice_parts = [seg.strip() for seg in re.split(r"[，,]", voice)
-                   if seg.strip() and seg.strip() != "default"]
     group = None
     for seg in voice_parts:
         g = next((g for g in groups_all if g.get("name") == seg), None)
@@ -478,37 +543,7 @@ async def api_tts_adapter(request: Request):
     tagged_member = next((mm for mm in members
                           if str(mm.get("label", "")).lower() == tag.lower()), None)
 
-    if not explicit_emo and mode == "guide_audio":
-        guide_path = None
-        if overrides.get("emo_ref"):
-            roots = _load_library()
-            rr = str(overrides["emo_ref"]).split("|", 1)
-            if len(rr) == 2 and 0 <= int(rr[0] or 0) < len(roots):
-                gp = Path(roots[int(rr[0])]["path"]) / rr[1]
-                guide_path = gp if gp.is_file() else None
-        elif tagged_member is not None:
-            guide_path = _member_audio(tagged_member)
-        elif hit is not None and hit.get("action") == "audio":
-            roots = _load_library()
-            rr = str(hit.get("audio", "")).split("|", 1)
-            if len(rr) == 2 and 0 <= int(rr[0] or 0) < len(roots):
-                gp = Path(roots[int(rr[0])]["path"]) / rr[1]
-                guide_path = gp if gp.is_file() else None
-        if guide_path is not None:
-            kwargs["emo_prompt_speech_b64"] = base64.b64encode(guide_path.read_bytes()).decode("ascii")
-            report["emotion"] = {"source": "guide_audio", "audio": guide_path.name}
-        elif hit is not None and hit.get("action") in ("vector", "text") \
-                and not any(k in kwargs for k in ("emo_vector", "use_emo_text")):
-            if hit["action"] == "vector":
-                kwargs["emo_vector"] = hit.get("vector") or [0, 0, 0, 0, 0, 0, 0, 0]
-            else:
-                kwargs["use_emo_text"] = True
-                kwargs["emo_text"] = hit.get("text", "")
-            kwargs.setdefault("emo_alpha", hit.get("alpha", 1.0))
-            report["emotion"] = {"source": "mapping", "action": hit["action"]}
-    elif not explicit_emo and mode == "group_switch" and hit is not None \
-            and hit.get("action") in ("vector", "text") \
-            and tagged_member is None \
+    if not explicit_emo and hit is not None and hit.get("action") in ("vector", "text") \
             and not any(k in kwargs for k in ("emo_vector", "use_emo_text")):
         if hit["action"] == "vector":
             kwargs["emo_vector"] = hit.get("vector") or [0, 0, 0, 0, 0, 0, 0, 0]
@@ -519,7 +554,7 @@ async def api_tts_adapter(request: Request):
         report["emotion"] = {"source": "mapping", "action": hit["action"]}
 
     if not explicit_ref:
-        chosen = tagged_member if (mode == "group_switch" and tagged_member is not None) else default_member
+        chosen = tagged_member if tagged_member is not None else default_member
         if chosen is not None:
             path = _member_audio(chosen)
             if path is not None:
@@ -535,12 +570,6 @@ async def api_tts_adapter(request: Request):
             {"detail": "OpenAI 适配：voice 未命中音色分组且未上传 prompt_speech，无法合成", "report": report},
             status_code=400)
     return await _proxy_tts(data, files, ref_info, adapter_report=report)
-
-
-def rules_for_adapter():
-    return api_emotions_get().get("rules", [])
-
-
 def _voice_seg_is_group(seg: str) -> bool:
     return any(g.get("name") == seg for g in _load_config("groups", {"groups": []}).get("groups", []))
 
