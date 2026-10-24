@@ -245,6 +245,15 @@ async def api_tts(request: Request):
 #   ④ voice=分组名 → 按情绪标签联动组内成员（无标签/未命中用默认成员）取参考音频。
 # 调用方在 kwargs 里显式给的参数永远优先，适配层只补空缺。
 
+# model 参数的模式关键词（中英，子串匹配）——命中即覆盖 settings.adapter_mode
+# （DSHT 兼容：模型名含 gpt-4o 才发情绪指令，故典型用法形如 gpt-4o-文字情感）
+ADAPTER_MODE_KEYWORDS = (
+    ("text_emotion", ("文字情感", "text_emotion", "text-emotion")),
+    ("guide_audio", ("引导音频", "guide_audio", "guide-audio")),
+    ("group_switch", ("切换音色", "group_switch", "group-switch")),
+)
+
+
 DSH_INSTRUCTION_RE = re.compile(
     r"^\s*用\s*([^，,。；;！!？?\s]{1,12}?)\s*的?\s*语气\s*"
     r"(?:(?:说|讲|念|朗读|读)\s*)?(?:这?句话?|这句话|这句|话)?\s*[。.！!？?]?\s*")
@@ -319,7 +328,19 @@ async def api_tts_adapter(request: Request):
     mode = _load_config("settings", {}).get("adapter_mode", "text_emotion")
     if mode not in ("text_emotion", "guide_audio", "group_switch"):
         mode = "text_emotion"
+    mode_source = "settings"
+    model_lower = report["model"]["in"].lower()  # 原始 model 值（顶部已被改写为 MODEL_NAME）
+    best = None  # (位置, mode)
+    for m, kws in ADAPTER_MODE_KEYWORDS:
+        for kw in kws:
+            pos = model_lower.find(kw.lower())
+            if pos >= 0 and (best is None or pos < best[0]):
+                best = (pos, m)
+    if best is not None:
+        mode = best[1]
+        mode_source = "model"
     report["mode"] = mode
+    report["mode_source"] = mode_source
 
     instructions = str(data.pop("instructions", "") or "").strip()
     text = str(data.get("input") or "")

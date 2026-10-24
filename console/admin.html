@@ -287,8 +287,8 @@ textarea{resize:vertical;min-height:6rem}
             <textarea id="ad-input" placeholder="大家好，欢迎体验……"></textarea>
           </label>
           <div class="grid2" style="margin-top:.75rem">
-            <label class="f" title="DSHT 兼容：要让 DSHT 发送情绪指令，模型名需含 gpt-4o（如 gpt-4o-mini-tts）——适配层忽略此值，统一路由到本机注册模型">
-              model（DSHT 兼容可填 gpt-4o-mini-tts，适配层忽略并路由到本机模型）
+            <label class="f" title="DSHT 兼容：模型名含 gpt-4o 才发情绪指令；适配层忽略此值统一路由本机模型。另支持模式关键词子串（覆盖默认行为）：文字情感 / 引导音频 / 切换音色（或 text_emotion / guide_audio / group_switch），如 gpt-4o-切换音色">
+              model（可携带模式关键词，如 gpt-4o-切换音色；适配层路由到本机模型）
               <input type="text" id="ad-model" value="IndexTTS-2.5">
             </label>
             <label class="f" title="支持逗号组合：「分组名,情绪词」（情绪词查情绪映射表）；#[音色分组][名] 内联可覆盖">
@@ -981,15 +981,18 @@ const ADAPTER_MODE_DESCS = {
     "voice 定音色：逗号（中英）分段，首个含分组名的段确定分组（该段整段消费，不再匹配标签），"
     + "其余段与分组内成员情绪标签做单向子串匹配（标签 ⊆ 词组，标签整体匹配不分词）——按成员顺序（=标签优先级，音色分组页可调）遍历，"
     + "首个命中的标签确认音色，未命中用默认成员；"
-    + "instructions 整段作为文字情感描述（emo_text）；情绪映射表在该模式不参与。",
+    + "instructions 整段作为文字情感描述（emo_text）；情绪映射表在该模式不参与。"
+    + "按请求覆盖：model 名含关键词 文字情感/text_emotion。",
   guide_audio:
     "voice 定分组与情感词：逗号分段，命中分组名的段定分组（默认成员做音色），"
     + "其余段与 instructions（剥「用X的语气」壳）经情绪映射表提供情绪标签；"
     + "标签命中组内成员 → 该成员音频作为引导音频（emo_prompt_speech_b64），"
-    + "无组内命中 → 映射规则 audio 引用 → 向量/文字 回退。",
+    + "无组内命中 → 映射规则 audio 引用 → 向量/文字 回退。"
+    + "按请求覆盖：model 名含关键词 引导音频/guide_audio。",
   group_switch:
     "voice 定分组；instructions/voice 情绪标签命中组内成员 → 切换到该成员音色，"
-    + "情感跟随该成员参考音频（不注入）；组内无命中但映射规则有向量/文字动作时仍注入。",
+    + "情感跟随该成员参考音频（不注入）；组内无命中但映射规则有向量/文字动作时仍注入。"
+    + "按请求覆盖：model 名含关键词 切换音色/group_switch。",
 };
 function renderModeDesc() {
   const v = $("def-mode").value;
