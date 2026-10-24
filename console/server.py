@@ -250,7 +250,8 @@ DSH_INSTRUCTION_RE = re.compile(
 @app.post("/api/tts/adapter")
 async def api_tts_adapter(request: Request):
     data, files, ref_info = await _read_form(request)
-    report = {"residual": None, "tag": "", "emotion": None, "voice_resolved": None, "stripped": []}
+    report = {"residual": None, "tag": "", "instruction": "", "emotion": None,
+              "voice_resolved": None, "stripped": []}
     try:
         kwargs = json.loads(data.get("kwargs") or "{}")
         if not isinstance(kwargs, dict):
@@ -259,13 +260,33 @@ async def api_tts_adapter(request: Request):
         kwargs = {}
 
     text = str(data.get("input") or "")
-    m = DSH_INSTRUCTION_RE.match(text)
-    if m:
-        tag = m.group(1)
-        text = text[m.end():]
-        report["stripped"].append({"kind": "instruction", "value": tag})
+    # ⓪ model 别名改写：DSHT 只有在模型名含 gpt-4o 时才发情绪指令，而 Xinference 的
+    #    model 必须是注册名（IndexTTS-2.5）——适配层忽略调用方的 model 值，统一路由本机模型。
+    model_in = str(data.get("model") or "")
+    data["model"] = MODEL_NAME
+    report["model"] = {"in": model_in, "used": MODEL_NAME}
+    # ① 情绪指令：OpenAI 标准字段 instructions（DSHT 把「用X的语气说这句话。」放这里，
+    #    也接受裸情绪短语如「温柔地」）；兼容回退：指令句直接写在 input 开头的老形态。
+    instructions = str(data.pop("instructions", "") or "").strip()
+    if instructions:
+        m2 = DSH_INSTRUCTION_RE.match(instructions)
+        tag = m2.group(1) if m2 else instructions
+        report["instruction"] = tag
+        mi = DSH_INSTRUCTION_RE.match(text)
+        if mi and mi.group(1) == tag:
+            text = text[mi.end():]
+            report["stripped"].append({"kind": "instruction-echo", "value": tag})
+    else:
+        m = DSH_INSTRUCTION_RE.match(text)
+        if m:
+            tag = m.group(1)
+            text = text[m.end():]
+            instructions = tag
+            report["instruction"] = tag
+            report["stripped"].append({"kind": "instruction", "value": tag})
+    report["tag"] = tag
 
-    # 情绪映射表：短语最长匹配（对残余文本）+ 指令词/联动标签对齐
+    # ② 情绪映射表：短语最长匹配（对正文残余）+ 指令词/联动标签对齐
     emap = api_emotions_get()
     rules = sorted(emap.get("rules", []),
                    key=lambda r: max([len(p) for p in r.get("phrases", [])] or [0]), reverse=True)
@@ -281,12 +302,15 @@ async def api_tts_adapter(request: Request):
         if hit is not None:
             break
     if hit is not None:
-        tag = hit.get("tag") or tag
+        if not tag:
+            tag = hit.get("tag") or tag
+            report["tag"] = tag
         for p in hit.get("phrases", []):
             if p and p in text:
                 text = text.replace(p, "")
                 report["stripped"].append({"kind": "phrase", "value": p})
 
+    # ③ 情感动作注入（调用方 kwargs 显式 emo_* 优先）
     if hit is not None and hit.get("action") in ("vector", "text") \
             and not any(k in kwargs for k in ("emo_vector", "use_emo_text", "emo_prompt_speech_b64")):
         if hit["action"] == "vector":

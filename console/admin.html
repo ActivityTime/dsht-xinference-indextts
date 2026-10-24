@@ -274,10 +274,17 @@ textarea{resize:vertical;min-height:6rem}
       <div id="adapter-box" style="display:none">
         <div class="card">
           <h3>请求字段（与 /v1/audio/speech 一致；服务端执行 DSHT 适配层）</h3>
-          <label class="f">input（支持 DSHT 情绪指令：用开心的语气说这句话。）
-            <textarea id="ad-input" placeholder="用开心的语气说这句话。大家好，欢迎体验……"></textarea>
+          <label class="f">instructions（OpenAI 标准字段：情绪指令「用X的语气说这句话。」或裸短语「温柔地」；适配层剥壳查映射）
+            <input type="text" id="ad-instructions" placeholder="可选，如：用开心的语气说这句话。">
+          </label>
+          <label class="f" style="margin-top:.75rem">input（纯正文，不含情绪指令）
+            <textarea id="ad-input" placeholder="大家好，欢迎体验……"></textarea>
           </label>
           <div class="grid2" style="margin-top:.75rem">
+            <label class="f" title="DSHT 兼容：要让 DSHT 发送情绪指令，模型名需含 gpt-4o（如 gpt-4o-mini-tts）——适配层忽略此值，统一路由到本机注册模型">
+              model（DSHT 兼容可填 gpt-4o-mini-tts，适配层忽略并路由到本机模型）
+              <input type="text" id="ad-model" value="IndexTTS-2.5">
+            </label>
             <label class="f">voice（default，或音色分组名——按情绪标签联动组内成员）
               <input type="text" id="ad-voice" value="default" list="ad-voice-list">
               <datalist id="ad-voice-list"></datalist>
@@ -1037,6 +1044,8 @@ async function applyAdapterDefaults() {
   try {
     const s = await (await fetch("/api/adapterform")).json();
     if (s.input !== undefined) $("ad-input").value = s.input;
+    $("ad-model").value = s.model ?? "IndexTTS-2.5";
+    $("ad-instructions").value = s.instructions ?? "";
     $("ad-voice").value = s.voice ?? "default";
     $("ad-fmt").value = s.response_format ?? "wav";
     $("ad-speed").value = s.speed ?? 1.0;
@@ -1045,7 +1054,9 @@ async function applyAdapterDefaults() {
 }
 async function saveAdapterDefault() {
   const body = {
+    model: $("ad-model").value.trim() || "IndexTTS-2.5",
     input: $("ad-input").value, voice: $("ad-voice").value.trim() || "default",
+    instructions: $("ad-instructions").value,
     response_format: $("ad-fmt").value, speed: parseFloat($("ad-speed").value) || 1.0,
     kwargs: $("ad-kwargs").value,
   };
@@ -1062,8 +1073,9 @@ async function doAdapter() {
   const kwargsRaw = $("ad-kwargs").value.trim();
   if (kwargsRaw) { try { JSON.parse(kwargsRaw); } catch { toast("kwargs 不是合法 JSON", true); return; } }
   const form = new FormData();
-  form.append("model", "IndexTTS-2.5");
+  form.append("model", $("ad-model").value.trim() || "IndexTTS-2.5");
   form.append("input", text);
+  form.append("instructions", $("ad-instructions").value.trim());
   form.append("voice", $("ad-voice").value.trim() || "default");
   form.append("response_format", $("ad-fmt").value);
   form.append("stream", "false");
