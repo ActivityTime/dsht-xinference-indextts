@@ -15,6 +15,7 @@ downloads/
 # 日志与运行时产物（本机特定，不入库）；backup 回滚点(.orig) 例外入库
 *.log
 server.pid
+.monitor.pid
 server_out.txt
 server_run.err
 server_start.err

@@ -75,6 +75,26 @@ if (Test-Health) {
     Write-Host '[OK] 服务就绪: ' $endpoint
 }
 
+# ---------- 1.5) 应用自维护覆盖 (maintained\xinference-override -> venv site-packages) ----------
+# 无补丁概念：我们改过的 Xinference 文件是无外部源的自维护资产，统一存 maintained\xinference-override，
+# 每次启动前幂等覆盖到 venv，确保运行的是自维护版（即使 venv 被 pip 重建也会被恢复）。
+function Sync-Maintained {
+    $srcRoot = Join-Path $PSScriptRoot 'maintained\xinference-override'
+    if (-not (Test-Path -LiteralPath $srcRoot)) {
+        Write-Host '[*] 无自维护覆盖 (maintained\xinference-override 不存在)'
+        return
+    }
+    $pkgRoot = Join-Path $venvDir 'Lib\site-packages'
+    Get-ChildItem -LiteralPath $srcRoot -Recurse -File | ForEach-Object {
+        $rel = $_.FullName.Substring($srcRoot.Length).TrimStart('\')
+        $dst = Join-Path $pkgRoot $rel
+        New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
+        Copy-Item -LiteralPath $_.FullName -Destination $dst -Force
+    }
+    Write-Host '[OK] 自维护 Xinference 覆盖已应用'
+}
+Sync-Maintained
+
 # ---------- 2) 加载 IndexTTS-2.5 (bf16) ----------
 # 注意: xinference launch CLI 无法传 use_bf16, 必须用 Python 客户端 model_config。
 # 权重本身是全精度, 此处加载时转 bf16 以减半显存(RTX3080 10GB 更稳)。
