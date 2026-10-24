@@ -439,29 +439,30 @@ async def api_tts_adapter(request: Request):
         members = (group or {}).get("members", [])
         default_member = next((mm for mm in members if mm.get("is_default")), None) \
             or (members[0] if members else None)
-        # 情绪标签：instructions 优先（剥壳词 + 映射短语命中）→ 拼接文本按标签优先级再筛
+        # 情绪标签：子串匹配（与文字情感模式一致，不规定「用X的语气」指令壳）——
+        # instructions 优先，voice 剩余段次之；按成员顺序（=标签优先级）首个命中即确认
         tag = overrides.get("tag", "")
-        word = ""
-        if instructions:
-            m2 = DSH_INSTRUCTION_RE.match(instructions)
-            word = m2.group(1) if m2 else instructions
-            tag = tag or word
-            report["instruction"] = word or instructions
-        # voice 剩余段与 instructions 拼接，按标签优先级（成员顺序）筛一遍
-        combined = "，".join(seg for seg in voice_parts if seg not in group_consumed)
-        combined = (combined + "，" + instructions).strip("，")
-        tagged_member = next((mm for mm in members
-                              if str(mm.get("label", "")).lower() == tag.lower()), None) if tag else None
-        if tagged_member is None and members:
-            for mm in members:
+        tagged_member = None
+        remaining = [seg for seg in voice_parts if seg not in group_consumed]
+        if members:
+            for mm in members:  # ① instructions 优先
                 label = str(mm.get("label", ""))
-                if label and label.lower() in combined.lower():
+                if label and instructions and label.lower() in instructions.lower():
                     tagged_member = mm
-                    if not tag:
-                        tag = label
+                    tag = label
                     break
+            if tagged_member is None:  # ② voice 剩余段
+                for mm in members:
+                    label = str(mm.get("label", ""))
+                    if label and any(label.lower() in seg.lower() for seg in remaining):
+                        tagged_member = mm
+                        tag = label
+                        break
         report["tag"] = tag
-        hit = _match_emotion_rule(rules_for_adapter(), combined, prefer_tag=tag) if combined else None
+        report["instruction"] = instructions
+        # 组内标签全未命中时的映射回退检索文本（instructions + voice 剩余段）
+        search_text = (instructions + "，" + "，".join(remaining)).strip("，")
+        hit = _match_emotion_rule(rules_for_adapter(), search_text) if search_text else None
         # 音色：恒为分组默认成员
         chosen = default_member
         if chosen is not None and not explicit_ref:

@@ -984,10 +984,11 @@ const ADAPTER_MODE_DESCS = {
     + "instructions 整段作为文字情感描述（emo_text）；情绪映射表在该模式不参与。"
     + "按请求覆盖：model 名含关键词 文字情感/text_emotion。",
   guide_audio:
-    "voice 定分组与情感词：逗号分段，命中分组名的段定分组（默认成员做音色），"
-    + "其余段与 instructions（剥「用X的语气」壳）经情绪映射表提供情绪标签；"
-    + "标签命中组内成员 → 该成员音频作为引导音频（emo_prompt_speech_b64），"
-    + "无组内命中 → 映射规则 audio 引用 → 向量/文字 回退。"
+    "voice 与 instructions 取音色分组+情绪标签（解析与文字情感一致：逗号中英分段、分组名整段消费、标签单向子串、不规定「用X的语气」格式）——"
+    + "分组优先从 voice 取（回退 instructions）；情绪标签优先从 instructions 取、其次 voice 剩余段，"
+    + "按成员顺序（=标签优先级）首个命中即确认；"
+    + "prompt_speech 恒取分组默认成员；emo_prompt_speech_b64 取标签命中成员的音频；"
+    + "未命中标签则都用默认、不注入（组内标签全未命中时回退情绪映射规则）。"
     + "按请求覆盖：model 名含关键词 引导音频/guide_audio。",
   group_switch:
     "voice 定分组；instructions/voice 情绪标签命中组内成员 → 切换到该成员音色，"
