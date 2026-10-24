@@ -764,6 +764,10 @@ class IndexTTS2:
         num_beams = generation_kwargs.pop("num_beams", 3)
         repetition_penalty = generation_kwargs.pop("repetition_penalty", 10.0)
         max_mel_tokens = generation_kwargs.pop("max_mel_tokens", 1500)
+        # sampler knobs (pop before the segment loop so multi-segment synthesis
+        # keeps them; popped keys never reach gpt.inference_speech kwargs)
+        adv_diffusion_steps = generation_kwargs.pop("diffusion_steps", None)
+        adv_inference_cfg_rate = generation_kwargs.pop("inference_cfg_rate", None)
         sampling_rate = 22050
 
         wavs = []
@@ -853,8 +857,10 @@ class IndexTTS2:
                 dtype = None
                 with torch.amp.autocast(text_tokens.device.type, enabled=dtype is not None, dtype=dtype):
                     m_start_time = time.perf_counter()
-                    diffusion_steps = 25
-                    inference_cfg_rate = 0.7
+                    # sampler knobs were popped from generation kwargs before the
+                    # segment loop (see above); absent → upstream defaults.
+                    diffusion_steps = max(1, int(adv_diffusion_steps or 25))
+                    inference_cfg_rate = float(adv_inference_cfg_rate if adv_inference_cfg_rate is not None else 0.7)
                     S_infer = self.semantic_codec.decode(codes)
                     target_lengths = torch.LongTensor([int(S_infer.shape[1] * 1.72 * duration_factor)]).to(codes.device)
 

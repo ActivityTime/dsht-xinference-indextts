@@ -270,6 +270,10 @@ textarea{resize:vertical;min-height:6rem}
           </label>
         </div>
       </div>
+      <details class="card">
+        <summary style="cursor:pointer;font-weight:600">高级参数（留空 = 上游默认）</summary>
+        <div id="adv-direct" style="margin-top:.75rem"></div>
+      </details>
       </div><!-- /direct-box -->
       <div id="adapter-box" style="display:none">
         <div class="card">
@@ -306,6 +310,10 @@ textarea{resize:vertical;min-height:6rem}
             <input type="file" id="ad-ref-file" accept=".wav,.mp3,.flac,.ogg,audio/*" style="font-size:.75rem">
           </label>
         </div>
+        <details class="card">
+          <summary style="cursor:pointer;font-weight:600">高级参数（合并进 kwargs；留空 = 上游默认）</summary>
+          <div id="adv-adapter" style="margin-top:.75rem"></div>
+        </details>
         <div class="card">
           <h3>适配报告</h3>
           <div class="log" id="ad-report" style="display:none"></div>
@@ -896,6 +904,7 @@ async function applyDefaultsToForm() {
   }
   // 情感模式与音频引导
   $("emo-mode").value = s.emo_mode ?? "none"; renderEmoMode();
+  renderAdvancedValues("adv-direct", s.advanced);
   if (s.emo_audio_lib) {
     fillPicker("emo-audio-lib", $("emo-audio-filter").value);
     ensureOption("emo-audio-lib", s.emo_audio_lib);
@@ -1050,6 +1059,7 @@ async function applyAdapterDefaults() {
     $("ad-fmt").value = s.response_format ?? "wav";
     $("ad-speed").value = s.speed ?? 1.0;
     $("ad-kwargs").value = s.kwargs ?? "";
+    renderAdvancedValues("adv-adapter", s.advanced);
   } catch { /* 首次无配置用页面默认 */ }
 }
 async function saveAdapterDefault() {
