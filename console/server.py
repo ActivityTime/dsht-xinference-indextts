@@ -395,7 +395,8 @@ def api_reflib_file(root: int, rel: str):
 # ────────────────────────── 配置文件（默认参数 / 情绪映射 / 音色分组） ──────────────────────────
 
 CONFIG_FILES = {
-    "settings": CONSOLE_DIR / "settings.json",        # 合成默认参数
+    "settings": CONSOLE_DIR / "settings.json",        # API 默认参数（API 配置页）
+    "ttsform": CONSOLE_DIR / "tts_defaults.json",     # 语音合成页默认填写状态（测试页专用）
     "emotions": CONSOLE_DIR / "emotion_map.json",     # 情绪映射规则（关键词→向量/文字/音频）
     "groups": CONSOLE_DIR / "voice_groups.json",      # 音色分组（同角色多情绪参考音频）
 }
@@ -431,6 +432,27 @@ async def api_settings_save(request: Request):
         if k in body:
             value[k] = body[k]
     _save_config("settings", value)
+    return value
+
+
+@app.get("/api/ttsform")
+def api_ttsform_get():
+    return _load_config("ttsform", {
+        "lang": "ZH", "speed": 1.0, "response_format": "wav", "emo_alpha": 1.0,
+        "auto_emotion": True, "emo_mode": "none",
+    })
+
+
+@app.post("/api/ttsform")
+async def api_ttsform_save(request: Request):
+    body = await request.json()
+    value = _load_config("ttsform", {})
+    for k in ("lang", "speed", "response_format", "emo_alpha", "auto_emotion", "emo_mode"):
+        if k in body:
+            value[k] = body[k]
+    if value.get("emo_mode") not in ("none", "vector", "text", "audio"):
+        value["emo_mode"] = "none"
+    _save_config("ttsform", value)
     return value
 
 

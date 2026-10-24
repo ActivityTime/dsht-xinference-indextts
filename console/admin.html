@@ -276,7 +276,7 @@ textarea{resize:vertical;min-height:6rem}
           <audio class="audio-out" id="tts-audio" controls></audio>
           <div class="row" style="margin-top:.5rem">
             <a class="btn btn-secondary" id="tts-dl" download>下载</a>
-            <button class="btn btn-secondary" onclick="saveAsDefault()">把当前参数存为默认</button>
+            <button class="btn btn-secondary" onclick="saveAsDefault()">存为合成页默认填写</button>
           </div>
         </div>
         <div class="log" id="tts-log" style="margin-top:.75rem;display:none"></div>
@@ -830,17 +830,29 @@ async function saveDefaults() {
   };
   await (await fetch("/api/settings", { method: "POST",
     headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
-  toast("默认参数已保存（新请求自动套用）");
-  applyDefaultsToForm();
+  toast("API 默认参数已保存");
 }
-function applyDefaultsToForm() {
-  fetch("/api/settings").then((r) => r.json()).then((s) => {
+/* ── 语音合成页默认填写状态（独立于 API 配置页的默认参数） ── */
+async function applyDefaultsToForm() {
+  try {
+    const s = await (await fetch("/api/ttsform")).json();
     $("tts-lang").value = s.lang ?? "ZH";
     $("tts-speed").value = s.speed ?? 1.0;
     $("tts-fmt").value = s.response_format ?? "wav";
     $("emo-alpha").value = s.emo_alpha ?? 1.0;
     $("emo-auto").checked = s.auto_emotion !== false;
-  }).catch(() => {});
+    $("emo-mode").value = s.emo_mode ?? "none"; renderEmoMode();
+  } catch { /* 首次无配置用页面默认 */ }
+}
+async function saveAsDefault() {
+  const body = {
+    lang: $("tts-lang").value, speed: parseFloat($("tts-speed").value) || 1.0,
+    response_format: $("tts-fmt").value, emo_alpha: parseFloat($("emo-alpha").value) || 1.0,
+    auto_emotion: $("emo-auto").checked, emo_mode: $("emo-mode").value,
+  };
+  await (await fetch("/api/ttsform", { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
+  toast("已存为合成页默认填写（刷新后自动套用；API 配置页的默认参数不受影响）");
 }
 
 /* ── 请求历史 ── */
