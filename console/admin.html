@@ -193,7 +193,8 @@ textarea{resize:vertical;min-height:6rem}
             </select>
           </label>
           <div id="ref-lib-box" style="flex:1;min-width:18rem">
-            <label class="f">库音频
+            <label class="f">库音频（输入可搜索）
+              <input type="text" id="tts-ref-filter" placeholder="搜索名称/分组…" oninput="renderTtsRefOptions()">
               <select id="tts-ref" onchange="updateRefPreview()"><option value="">— 选择 —</option></select>
             </label>
           </div>
@@ -449,8 +450,7 @@ async function loadRefLib() {
     refItems = data.items ?? [];
     $("reflib-count").textContent = refItems.length + " 个音频";
     renderRefLib();
-    $("tts-ref").innerHTML = '<option value="">— 选择 —</option>' +
-      refItems.map((it) => `<option value="${esc(libValue(it))}">${esc(libLabel(it))}</option>`).join("");
+    renderTtsRefOptions();
     renderEmoAudioOptions();
   } catch {
     $("reflib-list").innerHTML = '<div class="refgroup">参考音频库不可达</div>';
@@ -475,9 +475,22 @@ function renderRefLib() {
 }
 function useRef(root, rel) {
   $("ref-mode").value = "lib"; renderRefMode();
+  $("tts-ref-filter").value = ""; renderTtsRefOptions();
   $("tts-ref").value = root + "|" + rel; updateRefPreview();
   document.querySelector('.nav-item[data-page="tts"]').click();
   toast("已选为参考音频：" + rel);
+}
+function renderTtsRefOptions() {
+  const sel = $("tts-ref");
+  const cur = sel.value;
+  const kw = ($("tts-ref-filter").value || "").toLowerCase().trim();
+  const items = kw ? refItems.filter((it) => libLabel(it).toLowerCase().includes(kw)) : refItems;
+  const shown = items.slice(0, 400);
+  sel.innerHTML = '<option value="">— 选择 —</option>' +
+    (items.length > 400 ? `<option value="" disabled>… 共 ${items.length} 条，请输入关键词缩小范围</option>` : "") +
+    shown.map((it) => `<option value="${esc(libValue(it))}">${esc(libLabel(it))}</option>`).join("");
+  if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
+  else if (cur) { sel.value = ""; toast("已选音频被过滤出列表，请重新选择", true); updateRefPreview(); }
 }
 /* 简易过滤选择器（分组页成员 / 情感音频用） */
 function fillPicker(selId, kw) {
