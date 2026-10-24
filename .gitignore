@@ -1,0 +1,30 @@
+# ============ Xinference 部署项目 .gitignore ============
+# 原则：只入库"自写脚本 + 文档"，一切可由安装脚本重建/重新下载的内容一律忽略。
+
+# 虚拟环境（4.8GB，机器特定，install.ps1 重建）
+venv/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 官方 wheel 下载物（2.6GB，install.ps1 自动从 download.pytorch.org 重下）
+downloads/
+
+# 日志与运行时产物（本机特定，不入库）
+*.log
+server.pid
+server_out.txt
+server_run.err
+server_start.err
+server_start.log.err
+
+# 模型权重缓存（在 ~/.cache/huggingface，本目录无；防御性忽略）
+.cache/
+
+# 系统 / 编辑器
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/

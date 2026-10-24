@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Xinference 项目架构图</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; background: #f5f7fa; color: #1f2328; padding: 24px; line-height: 1.6; }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  h1 { font-size: 24px; margin-bottom: 4px; }
+  .sub { color: #57606a; font-size: 13px; margin-bottom: 20px; }
+  .card { background: #fff; border: 1px solid #d8dee4; border-radius: 10px; padding: 18px 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+  .card h2 { font-size: 16px; margin-bottom: 12px; color: #24292f; border-left: 4px solid #0969da; padding-left: 8px; }
+  .legend { display: flex; gap: 20px; font-size: 13px; margin: 10px 0; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .dot-official { background: #dafbe1; border: 1px solid #1a7f37; }
+  .dot-user { background: #fff8c5; border: 1px solid #9a6700; }
+  .dot-env { background: #ddf4ff; border: 1px solid #0969da; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { border: 1px solid #d8dee4; padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
+  tr:nth-child(even) td { background: #fafbfc; }
+  code { background: #eff1f3; border: 1px solid #e0e3e6; border-radius: 4px; padding: 1px 6px; font-family: Consolas, monospace; font-size: 12.5px; }
+  .tag { display: inline-block; font-size: 11.5px; padding: 1px 8px; border-radius: 10px; font-weight: 600; }
+  .tag-official { background: #dafbe1; color: #116329; }
+  .tag-user { background: #fff8c5; color: #7a5a00; }
+  .tree { font-family: Consolas, monospace; font-size: 13px; background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 8px; padding: 14px 18px; overflow-x: auto; white-space: pre; }
+  .tree .o { color: #1a7f37; }
+  .tree .u { color: #9a6700; }
+  .tree .e { color: #0969da; }
+  .kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 10px; }
+  .kv .item { border: 1px solid #e0e3e6; border-radius: 8px; padding: 10px 12px; background: #fafbfc; }
+  .kv .item b { display: block; font-size: 13px; margin-bottom: 3px; }
+  .kv .item code { display: block; margin-top: 4px; }
+  .status { display: inline-flex; align-items: center; gap: 8px; background: #dafbe1; border: 1px solid #1a7f37; color: #116329; border-radius: 20px; padding: 4px 14px; font-size: 13px; font-weight: 600; }
+  .status .pulse { width: 9px; height: 9px; border-radius: 50%; background: #1a7f37; animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(1.25)} 100%{opacity:1;transform:scale(1)} }
+  .note { font-size: 12px; color: #57606a; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Xinference 项目架构图</h1>
+  <div class="sub">K:\SomeApps\Xinference · 本地 Xinference 4.0.1 + IndexTTS-2.5 语音服务部署（供 DSH-Tavern 接入）· 整理日期 2026-10-24</div>
+
+  <div class="card">
+    <h2>运行状态</h2>
+    <span class="status"><span class="pulse"></span>服务运行中 · http://127.0.0.1:9997（/status = 200，pid 43308）</span>
+    <div class="note">最近一次加载：IndexTTS-2.5（use_bf16=True）。日志：launch.log / server_run.log。</div>
+  </div>
+
+  <div class="card">
+    <h2>整体数据流</h2>
+    <div class="legend">
+      <span><span class="dot dot-official"></span>官方组件（未改动）</span>
+      <span><span class="dot dot-user"></span>用户自写</span>
+      <span><span class="dot dot-env"></span>环境/底座</span>
+    </div>
+    <svg viewBox="0 0 1100 400" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;">
+      <!-- 1. DSH-Tavern -->
+      <rect x="380" y="16" width="340" height="58" rx="10" fill="#24292f"/>
+      <text x="550" y="42" fill="#fff" font-size="16" font-weight="700" text-anchor="middle">DSH-Tavern</text>
+      <text x="550" y="62" fill="#c9d1d9" font-size="12" text-anchor="middle">Provider Endpoint → http://127.0.0.1:9997/v1</text>
+      <line x1="550" y1="74" x2="550" y2="104" stroke="#57606a" stroke-width="2"/>
+      <polygon points="541,100 550,112 559,100" fill="#57606a"/>
+      <!-- 2. Xinference 服务 -->
+      <rect x="130" y="114" width="840" height="120" rx="12" fill="#dafbe1" stroke="#1a7f37" stroke-width="1.5"/>
+      <text x="550" y="140" fill="#116329" font-size="16" font-weight="700" text-anchor="middle">Xinference 4.0.1 服务 · 官方 pip wheel（未改动）</text>
+      <text x="550" y="160" fill="#1a7f37" font-size="12.5" text-anchor="middle">xinference-local --host 127.0.0.1 --port 9997 · 关闭鉴权 · 就绪超时 180s</text>
+      <rect x="160" y="174" width="300" height="46" rx="8" fill="#fff" stroke="#1a7f37"/>
+      <text x="310" y="193" fill="#1f2328" font-size="13" font-weight="600" text-anchor="middle">/v1 OpenAI 兼容 API</text>
+      <text x="310" y="210" fill="#57606a" font-size="11.5" text-anchor="middle">audio 模型 · RESTfulClient 驱动</text>
+      <rect x="640" y="174" width="300" height="46" rx="8" fill="#fff8c5" stroke="#9a6700"/>
+      <text x="790" y="193" fill="#1f2328" font-size="13" font-weight="600" text-anchor="middle">launch_indextts.py · 用户自写</text>
+      <text x="790" y="210" fill="#57606a" font-size="11.5" text-anchor="middle">model_config={"use_bf16":true} · 失败回退 IndexTTS2</text>
+      <line x1="550" y1="234" x2="550" y2="262" stroke="#57606a" stroke-width="2"/>
+      <polygon points="541,258 550,270 559,258" fill="#57606a"/>
+      <!-- 3. IndexTTS -->
+      <rect x="130" y="272" width="840" height="72" rx="12" fill="#dafbe1" stroke="#1a7f37"/>
+      <text x="550" y="298" fill="#116329" font-size="15" font-weight="700" text-anchor="middle">IndexTTS-2.5 · 官方 IndexTeam 权重（约 6GB，HF 下载）</text>
+      <text x="550" y="318" fill="#1a7f37" font-size="12.5" text-anchor="middle">全精度权重 · 加载时 cast 成 bf16（RTX 3080 10GB 显存优化）· 无量化版本</text>
+      <text x="550" y="336" fill="#57606a" font-size="11.5" text-anchor="middle">HF_ENDPOINT=https://hf-mirror.com · HF_HUB_DISABLE_XET=1</text>
+      <line x1="550" y1="344" x2="550" y2="366" stroke="#57606a" stroke-width="2"/>
+      <polygon points="541,362 550,374 559,362" fill="#57606a"/>
+      <!-- 4. 底座 -->
+      <rect x="130" y="374" width="840" height="26" rx="8" fill="#ddf4ff" stroke="#0969da"/>
+      <text x="550" y="392" fill="#0550ae" font-size="12.5" font-weight="600" text-anchor="middle">torch 2.11.0+cu128 · torchaudio · torchvision 0.26.0+cu128 · transformers 5.17.0（官方 wheel，CUDA 12.8 / sm_86）</text>
+      <!-- 侧栏：自写资产 -->
+      <rect x="980" y="114" width="104" height="286" rx="8" fill="#fff8c5" stroke="#9a6700" stroke-dasharray="4 3"/>
+      <text x="1032" y="136" fill="#9a6700" font-size="12" font-weight="700" text-anchor="middle">用户自写</text>
+      <text x="1032" y="158" fill="#1f2328" font-size="10.5" text-anchor="middle">start_*.ps1/.bat</text>
+      <text x="1032" y="176" fill="#1f2328" font-size="10.5" text-anchor="middle">launch_indextts.py</text>
+      <text x="1032" y="194" fill="#1f2328" font-size="10.5" text-anchor="middle">acl_fix.ps1</text>
+      <text x="1032" y="212" fill="#1f2328" font-size="10.5" text-anchor="middle">问题记录/</text>
+      <text x="1032" y="230" fill="#1f2328" font-size="10.5" text-anchor="middle">说明文档/</text>
+      <text x="1032" y="248" fill="#1f2328" font-size="10.5" text-anchor="middle">*.log / server.pid</text>
+      <text x="1032" y="284" fill="#9a6700" font-size="10.5" font-weight="600" text-anchor="middle">官方（未改动）</text>
+      <text x="1032" y="302" fill="#1f2328" font-size="10.5" text-anchor="middle">site-packages/</text>
+      <text x="1032" y="320" fill="#1f2328" font-size="10.5" text-anchor="middle">xinference 4.0.1</text>
+      <text x="1032" y="338" fill="#1f2328" font-size="10.5" text-anchor="middle">downloads/*.whl</text>
+      <text x="1032" y="356" fill="#1f2328" font-size="10.5" text-anchor="middle">IndexTTS 权重</text>
+      <text x="1032" y="386" fill="#57606a" font-size="9.5" text-anchor="middle">示意图</text>
+    </svg>
+  </div>
+
+  <div class="card">
+    <h2>官方组件 vs 用户自写（分类清单）</h2>
+    <table>
+      <tr><th style="width:30%">组件</th><th style="width:12%">归属</th><th>说明 / 来源</th></tr>
+      <tr><td><code>venv\Lib\site-packages\xinference</code></td><td><span class="tag tag-official">官方</span></td><td>Xinference 4.0.1 pip wheel（Apache-2.0，Homepage: xorbitsai/inference）。时间戳一致，无本地补丁。</td></tr>
+      <tr><td><code>venv\...\torch / torchaudio / torchvision</code></td><td><span class="tag tag-official">官方</span></td><td>2.11.0+cu128 / 2.11.0+cu128 / 0.26.0+cu128（CUDA 12.8 版，官方 PyPI cu128 索引）。</td></tr>
+      <tr><td><code>venv\...\transformers</code></td><td><span class="tag tag-official">官方</span></td><td>5.17.0。</td></tr>
+      <tr><td><code>downloads\</code></td><td><span class="tag tag-official">官方</span></td><td>3 个 cu128 wheel（torch 2.75GB / torchaudio / torchvision），来自 download.pytorch.org/whl/cu128（curl 直连下载）。</td></tr>
+      <tr><td>IndexTTS-2.5 权重（HF 缓存）</td><td><span class="tag tag-official">官方</span></td><td>IndexTeam/IndexTTS-2.5 全精度约 6GB（hf-mirror.com 镜像下载）。</td></tr>
+      <tr><td><code>launch_indextts.py</code></td><td><span class="tag tag-user">自写</span></td><td>RESTfulClient 加载模型，传 model_config={"use_bf16"}（CLI 无此参数），失败自动回退 IndexTTS2。</td></tr>
+      <tr><td><code>start_xinference_indextts.ps1</code></td><td><span class="tag tag-user">自写</span></td><td>一键启动：/status 健康探测、最多 4 分钟就绪等待、环境变量、加载模型、打印 DSH-Tavern 接入信息。</td></tr>
+      <tr><td><code>start_xinference_indextts.bat</code></td><td><span class="tag tag-user">自写</span></td><td>薄封装：优先 pwsh，否则 powershell 调用 ps1。</td></tr>
+      <tr><td><code>acl_fix.ps1</code> + <code>acl_fix.log</code></td><td><span class="tag tag-user">自写</span></td><td>修复 System32 MSVC/OpenMP 运行库 ACL 损坏（WinError 5 根因：CONCRT140 等 DLL 拒绝读取）。</td></tr>
+      <tr><td><code>说明文档\官方仓库.txt</code></td><td><span class="tag tag-user">自写</span></td><td>官方仓库/文档地址备忘（xorbitsai/inference、index-tts/index-tts）。</td></tr>
+      <tr><td><code>问题记录\问题记录.md</code></td><td><span class="tag tag-user">自写</span></td><td>8 条排障记录（ACL / cu128 换装 / Cluster not available / 401 鉴权 / /health 404 / CLI 无 bf16 / 精度说明 / 本机环境特殊性）。</td></tr>
+      <tr><td>根目录 <code>*.log</code>、<code>server.pid</code></td><td><span class="tag tag-user">自写</span></td><td>安装与运行日志（cuda_install*.log、local_install.log、launch.log、server_*.log/err、curl_extra.log）、当前服务 pid。</td></tr>
+      <tr><td><code>venv\</code>（环境本身）</td><td><span class="tag tag-env">环境</span></td><td>用户创建的 Python 3.13 虚拟环境；内部内容全为官方包。</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>目录结构</h2>
+    <div class="tree">K:\SomeApps\Xinference\
+├─ <span class="o">downloads\</span>                          # 官方 cu128 wheel（torch 2.75GB / torchaudio / torchvision）
+├─ <span class="e">venv\</span>                              # Python 3.13 虚拟环境（用户创建）
+│  └─ Lib\site-packages\
+│     ├─ <span class="o">xinference</span>                   # 官方 Xinference 4.0.1（pip wheel，未改动）
+│     ├─ <span class="o">transformers</span>                 # 5.17.0
+│     └─ <span class="o">torch / torchaudio / torchvision</span>  # 2.11.0+cu128 系列
+├─ <span class="u">说明文档\</span>                            # 用户文档
+│  ├─ 官方仓库.txt
+│  └─ Xinference项目架构图.html        ← 本文件
+├─ <span class="u">问题记录\</span>
+│  └─ 问题记录.md                       # 8 条排障记录
+├─ <span class="u">launch_indextts.py</span>                  # 加载 IndexTTS-2.5（bf16）
+├─ <span class="u">start_xinference_indextts.ps1 / .bat</span>  # 一键启动
+├─ <span class="u">acl_fix.ps1</span> / acl_fix.log
+└─ <span class="u">*.log</span> / server.pid / server_out.txt      # 安装/启动/运行日志</div>
+  </div>
+
+  <div class="card">
+    <h2>关键配置（最终可用）</h2>
+    <div class="kv">
+      <div class="item"><b>启动命令</b><code>xinference-local --host 127.0.0.1 --port 9997</code></div>
+      <div class="item"><b>监听地址</b><code>127.0.0.1</code>（勿用 0.0.0.0：内部 health_check 连不上子进程）</div>
+      <div class="item"><b>就绪超时</b><code>XINFERENCE_HEALTH_CHECK_TIMEOUT=180</code>（默认 10s 太短，实测 ~51s 就绪）</div>
+      <div class="item"><b>鉴权</b><code>XINFERENCE_AUTH_ADVANCED=0</code>（4.x 新增鉴权，本地直连关闭）</div>
+      <div class="item"><b>HF 镜像</b><code>HF_ENDPOINT=https://hf-mirror.com</code></div>
+      <div class="item"><b>Xet 关闭</b><code>HF_HUB_DISABLE_XET=1</code>（避免下载卡死）</div>
+      <div class="item"><b>健康探测</b><code>/status</code>（4.x 中 /health 返回 404）</div>
+      <div class="item"><b>模型加载</b><code>launch_indextts.py</code>（model_config={"use_bf16":true}，CLI 无法传此参数）</div>
+      <div class="item"><b>DSH-Tavern 接入</b><code>Provider Endpoint → http://127.0.0.1:9997/v1</code></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>本机环境特殊性（易踩坑）</h2>
+    <table>
+      <tr><th style="width:26%">项</th><th>说明</th></tr>
+      <tr><td>环境变量盘符</td><td><code>APPDATA / LOCALAPPDATA / USERPROFILE</code> 均解析到 <code>K:\Users\ACTIM.DESKTOP-BPAEDTM</code>（非 C 盘）。</td></tr>
+      <tr><td>python 命令</td><td>第一个解析到豆包沙箱运行时 Python（不可用于正式安装）；真实系统 Python 在 <code>K:\Users\...\AppData\Local\Programs\Python\Python313\python.exe</code>（3.13.16）。</td></tr>
+      <tr><td>pip 镜像</td><td>默认华为云镜像 mirrors.huaweicloud.com/repository/pypi/simple/。</td></tr>
+      <tr><td>PowerShell</td><td><code>$HOME</code> 是保留变量，脚本里勿用 <code>$home</code> 存用户目录。</td></tr>
+    </table>
+  </div>
+
+  <div class="note">说明：本图内容基于目录实测、问题记录.md、启动/加载脚本与运行日志整理（2026-10-24）。官方组件均未做源码级修改；pip wheel 安装方式下无本地 git 仓库、无 editable 痕迹。</div>
+
+</div>
+</body>
+</html>
