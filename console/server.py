@@ -510,7 +510,8 @@ def api_reflib_file(root: int, rel: str):
 
 CONFIG_FILES = {
     "settings": CONSOLE_DIR / "settings.json",        # API 默认参数（API 配置页）
-    "ttsform": CONSOLE_DIR / "tts_defaults.json",     # 语音合成页默认填写状态（测试页专用）
+    "ttsform": CONSOLE_DIR / "tts_defaults.json",     # 语音合成页默认填写状态（直接配置专用）
+    "adapterform": CONSOLE_DIR / "adapter_defaults.json",  # OpenAI 适配页默认填写状态
     "emotions": CONSOLE_DIR / "emotion_map.json",     # 情绪映射规则（关键词→向量/文字/音频）
     "groups": CONSOLE_DIR / "voice_groups.json",      # 音色分组（同角色多情绪参考音频）
 }
@@ -575,6 +576,25 @@ async def api_ttsform_save(request: Request):
     if value.get("emo_mode") not in ("none", "auto", "vector", "text", "audio"):
         value["emo_mode"] = "none"
     _save_config("ttsform", value)
+    return value
+
+
+@app.get("/api/adapterform")
+def api_adapterform_get():
+    return _load_config("adapterform", {
+        "input": "", "voice": "default", "response_format": "wav",
+        "speed": 1.0, "kwargs": "",
+    })
+
+
+@app.post("/api/adapterform")
+async def api_adapterform_save(request: Request):
+    body = await request.json()
+    value = _load_config("adapterform", {})
+    for k in ("input", "voice", "response_format", "speed", "kwargs"):
+        if k in body:
+            value[k] = body[k]
+    _save_config("adapterform", value)
     return value
 
 

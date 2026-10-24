@@ -312,6 +312,7 @@ textarea{resize:vertical;min-height:6rem}
           <span id="tts-meta" style="font-size:.75rem;color:hsl(var(--muted-foreground))"></span>
           <span class="pill" id="pill-cache" style="display:none"><span class="dot"></span><span id="cache-text"></span></span>
           <button class="btn btn-secondary" id="btn-save-default" style="margin-left:auto" onclick="saveAsDefault()" title="把直接配置页全部选项的当前状态存为默认填写（刷新自动套用）">存为合成页默认填写</button>
+          <button class="btn btn-secondary" id="btn-save-adapter" style="margin-left:auto;display:none" onclick="saveAdapterDefault()" title="把适配页请求字段的当前状态存为默认填写（刷新自动套用）">存为适配页默认填写</button>
         </div>
         <div id="tts-result" style="display:none;margin-top:.75rem">
           <audio class="audio-out" id="tts-audio" controls></audio>
@@ -941,6 +942,7 @@ function renderPageMode() {
   $("direct-box").style.display = adapter ? "none" : "";
   $("adapter-box").style.display = adapter ? "" : "none";
   $("btn-save-default").style.display = adapter ? "none" : "";
+  $("btn-save-adapter").style.display = adapter ? "" : "none";
   $("mode-hint").textContent = adapter
     ? "填 API 请求字段；服务端适配层剥指令壳、查情绪映射、按分组联动成员。"
     : "手动选参考音频与情感，所见即所得。";
@@ -1030,6 +1032,28 @@ async function doTtsDirect() {
   }
 }
 
+/* ── 适配页默认填写状态（独立于直接模式的 ttsform） ── */
+async function applyAdapterDefaults() {
+  try {
+    const s = await (await fetch("/api/adapterform")).json();
+    if (s.input !== undefined) $("ad-input").value = s.input;
+    $("ad-voice").value = s.voice ?? "default";
+    $("ad-fmt").value = s.response_format ?? "wav";
+    $("ad-speed").value = s.speed ?? 1.0;
+    $("ad-kwargs").value = s.kwargs ?? "";
+  } catch { /* 首次无配置用页面默认 */ }
+}
+async function saveAdapterDefault() {
+  const body = {
+    input: $("ad-input").value, voice: $("ad-voice").value.trim() || "default",
+    response_format: $("ad-fmt").value, speed: parseFloat($("ad-speed").value) || 1.0,
+    kwargs: $("ad-kwargs").value,
+  };
+  await (await fetch("/api/adapterform", { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
+  toast("已存为适配页默认填写（刷新后自动套用）");
+}
+
 /* ── OpenAI 适配合成（请求字段 + 服务端适配层） ── */
 async function doAdapter() {
   const btn = $("tts-go");
@@ -1092,6 +1116,7 @@ async function init() {
   await loadGroups();
   refreshAll();
   await applyDefaultsToForm();
+  applyAdapterDefaults();
   setInterval(refreshAll, 15000);
 }
 init();
