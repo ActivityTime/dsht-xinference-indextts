@@ -334,9 +334,9 @@ async def api_tts_adapter(request: Request):
             g = next((g for g in groups_all
                       if g.get("name") and g.get("name") in seg), None)
             if g is not None:
-                group = g
-                group_consumed.add(seg)
-                break  # 多个匹配取第一个
+                group_consumed.add(seg)  # 命中分组名的段一律不再参与标签匹配
+                if group is None:
+                    group = g  # 多个命中取第一个
         matched_member = None
         if group is not None:
             for seg in voice_parts:
