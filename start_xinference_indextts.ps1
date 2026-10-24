@@ -33,6 +33,18 @@ $endpoint  = $Script:Endpoint
 #       XINFERENCE_HEALTH_CHECK_TIMEOUT/XINFERENCE_AUTH_ADVANCED/XINFERENCE_ENDPOINT/MODEL_NAME）
 #      此处仅追加每次运行需要的动态项 ----
 
+# ---- 单例互斥：禁止同时启动多个 ----
+# 锁端口 = port+2 (9999)；monitor_indextts.py 用 .monitor.pid 文件锁，互不冲突。
+$mutexPort = $port + 2
+try {
+    $mutexListener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Parse('127.0.0.1'), $mutexPort)
+    $mutexListener.Start()
+    Write-Host "[OK] 单例锁取得 (端口 $mutexPort)"
+} catch {
+    Write-Host "[!] 已有启动/监控实例在运行，禁止多开 (锁端口 $mutexPort 被占用)。本脚本退出。"
+    exit 0
+}
+
 function Test-Health {
     # 4.x 用 /status 探测; /health 已返回 404
     try {
@@ -79,3 +91,23 @@ Write-Host 'OpenAI 兼容端点    : ' ($endpoint + '/v1')
 Write-Host '模型              : ' $modelName
 Write-Host 'DSH-Tavern 配置    : Provider Endpoint -> ' ($endpoint + '/v1')
 Write-Host '=========================================='
+
+# ---------- 4) 拉起守护监控（单例常驻；未运行则启动，已运行则跳过）----------
+# monitor_indextts.py: 单例守卫 + 进程互监控 + 自动卸载重复实例 + 防重复加载。
+# 检测 monitor 是否在运行：查 .monitor.pid 中的 PID 是否存活。
+$monitorPy = Join-Path $PSScriptRoot 'scripts\monitor_indextts.py'
+$monPidFile = Join-Path $PSScriptRoot '.monitor.pid'
+$monRunning = $false
+if (Test-Path -LiteralPath $monPidFile) {
+    $oldPid = (Get-Content -LiteralPath $monPidFile -Raw).Trim()
+    if ($oldPid -match '^\d+$' -and (Get-Process -Id ([int]$oldPid) -ErrorAction SilentlyContinue)) {
+        $monRunning = $true   # PID 存活 => monitor 已在运行
+    }
+}
+if ($monRunning) {
+    Write-Host '[*] 守护监控已在运行 (跳过拉起)'
+} else {
+    Write-Host '[*] 拉起守护监控 (常驻, 防重复/多实例/自愈) ...'
+    Start-Process -FilePath (Join-Path $venvDir 'Scripts\python.exe') -ArgumentList $monitorPy,'--interval','20' -WindowStyle Hidden
+    Write-Host '[*] 守护监控已后台启动 (日志见 logs\monitor.log)'
+}
