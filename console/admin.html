@@ -389,7 +389,7 @@ textarea{resize:vertical;min-height:6rem}
     <!-- 音色分组页 -->
     <section class="page" id="page-groups">
       <h2 class="page-title">音色分组</h2>
-      <p class="page-sub">同角色多情绪：一个分组 = 一组带情绪标签的参考音频（其中一个是默认）。合成页「音色来源 → 音色分组」按此消费。存 console/voice_groups.json。</p>
+      <p class="page-sub">同角色多情绪：一个分组 = 一组带情绪标签的参考音频（其中一个是默认）。<b>成员顺序 = 标签匹配优先级</b>（文字情感模式下，按顺序首个在 voice 词组中命中的标签确认音色），用 ↑↓ 调整。存 console/voice_groups.json。</p>
       <div class="card">
         <div class="row" style="margin-bottom:.75rem">
           <button class="btn btn-secondary" onclick="loadGroups()">刷新</button>
@@ -886,6 +886,8 @@ function renderGroups() {
       ${(g.members ?? []).map((m, mi) => `
         <div class="memitem">
           <input type="radio" name="def-${gi}" ${m.is_default ? "checked" : ""} onchange="setDefaultMember(${gi},${mi})" title="默认成员" style="width:auto">
+          <button class="btn btn-secondary btn-sm" onclick="moveMember(${gi},${mi},-1)" title="上移（提高匹配优先级）" ${mi === 0 ? "disabled" : ""}>↑</button>
+          <button class="btn btn-secondary btn-sm" onclick="moveMember(${gi},${mi},1)" title="下移（降低匹配优先级）" ${mi === (g.members.length - 1) ? "disabled" : ""}>↓</button>
           <input type="text" value="${esc(m.label)}" data-g="${gi}" data-m="${mi}" data-k="label" placeholder="情绪标签（如 平静/开心）" style="max-width:11rem">
           <input type="text" value="${esc(m.rel)}" readonly title="${esc(m.rel)}" style="flex:1;font-size:.75rem;color:hsl(var(--muted-foreground))">
           <button class="btn btn-danger btn-sm" onclick="delGroupMember(${gi},${mi})">删</button>
@@ -904,6 +906,13 @@ function renderGroups() {
   box.querySelectorAll("input[data-g][data-m][data-k='label']").forEach((inp) => {
     inp.onchange = () => { groups.groups[+inp.dataset.g].members[+inp.dataset.m].label = inp.value; };
   });
+}
+function moveMember(gi, mi, dir) {
+  const members = groups.groups[gi].members;
+  const j = mi + dir;
+  if (j < 0 || j >= members.length) return;
+  [members[mi], members[j]] = [members[j], members[mi]];
+  renderGroups();
 }
 function setDefaultMember(gi, mi) {
   groups.groups[gi].members.forEach((m, i) => (m.is_default = i === mi));

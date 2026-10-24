@@ -339,15 +339,17 @@ async def api_tts_adapter(request: Request):
                     group = g  # 多个命中取第一个
         matched_member = None
         if group is not None:
-            for seg in voice_parts:
-                if seg in group_consumed:
-                    continue  # 命中分组名的段不允许再匹配成员标签
-                for mm in group.get("members", []):
-                    label = str(mm.get("label", ""))
-                    if label and (label.lower() in seg.lower() or seg.lower() in label.lower()):
-                        matched_member = mm
-                        break
-                if matched_member is not None:
+            remaining = [seg for seg in voice_parts if seg not in group_consumed]
+            # 按分组内标签顺序（优先级）遍历：首个在任一剩余词组中命中的标签即确认
+            # （用户例：标签序【不好笑】【笑】【伤心】时，「她很伤心」在前的词组不赢，
+            #   优先级更高的【不好笑】命中「这一点也不好笑」胜出）
+            for mm in group.get("members", []):
+                label = str(mm.get("label", ""))
+                if not label:
+                    continue
+                ll = label.lower()
+                if any(ll in seg.lower() or seg.lower() in ll for seg in remaining):
+                    matched_member = mm
                     break
         # 音色：命中的成员，未命中用分组默认成员
         default_member = next((mm for mm in (group or {}).get("members", []) if mm.get("is_default")), None) \
