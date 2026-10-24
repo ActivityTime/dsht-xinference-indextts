@@ -376,14 +376,14 @@ textarea{resize:vertical;min-height:6rem}
     <!-- 情绪映射页 -->
     <section class="page" id="page-emotions">
       <h2 class="page-title">情绪映射</h2>
-      <p class="page-sub">关键词 → 情感向量 / 文字情感描述。合成时按文本自动匹配（或手动快速选择）。规则存 console/emotion_map.json。</p>
+      <p class="page-sub">情绪映射模式条目：绑定音色分组；子条目有序混排（情绪标签-音频 / 向量映射 / 文字情感），与分组成员同级、排序独立（不与音色分组同步，↑↓ 调整）；音频子条目可勾选「替换默认音色」（命中时该音频同时替换 prompt_speech）；条目级开关：未命中任何子条目时用整个 instructions 作文字情感，未勾选则无情感控制。执行：instructions + voice 命中分组 → 其余词组按子条目顺序子串命中首个生效。存 console/emotion_mappings.json。</p>
       <div class="card">
         <div class="row" style="margin-bottom:.75rem">
-          <button class="btn btn-secondary" onclick="loadEmotions()">刷新</button>
-          <button class="btn btn-secondary" onclick="addEmoRule()">加一条规则</button>
-          <button class="btn btn-primary" style="margin-left:auto" onclick="saveEmotions()">保存全部</button>
+          <button class="btn btn-secondary" onclick="loadEmappings()">刷新</button>
+          <button class="btn btn-secondary" onclick="addEmapping()">加一个条目</button>
+          <button class="btn btn-primary" style="margin-left:auto" onclick="saveEmappings()">保存全部</button>
         </div>
-        <div id="emo-rules">加载中…</div>
+        <div id="emapping-list">加载中…</div>
       </div>
     </section>
 
@@ -442,6 +442,7 @@ textarea{resize:vertical;min-height:6rem}
               <option value="guide_audio">引导音频：voice 定分组与默认音色，instructions 定引导音频</option>
               <option value="group_switch">切换音色：voice 定分组，instructions 情绪切组内音色</option>
               <option value="vector">情绪向量：向量映射触发词命中→注入向量，否则同切换音色</option>
+              <option value="emotion_map">情绪映射：条目绑定分组，有序子条目（音频/向量/文字）按顺序命中</option>
             </select>
           </label>
           <label class="f" style="flex-direction:row;align-items:center;gap:.375rem">解析 DSHT 情绪指令
@@ -506,7 +507,7 @@ document.querySelectorAll(".nav-item").forEach((el) => {
     el.classList.add("active");
     $("page-" + el.dataset.page).classList.add("active");
     if (el.dataset.page === "history") loadHistory();
-    if (el.dataset.page === "emotions") loadEmotions();
+    if (el.dataset.page === "emotions") loadEmappings();
     if (el.dataset.page === "groups") loadGroups();
     if (el.dataset.page === "api") loadApiPage();
     if (el.dataset.page === "vectormap") loadVectorMap();
@@ -803,7 +804,143 @@ function renderEmoAudioOptions() { fillPicker("emo-audio-lib", $("emo-audio-filt
 function setEmo(v) { $("emo-vector").value = v; }
 
 
-/* ── 情绪映射页（OmniVoice 语义：短语 → 联动标签 tag + 动作） ── */
+/* ── 情绪映射页（#50：条目=绑定分组+有序子条目）──
+   旧规则编辑（loadEmotions 等）已停用保留；本页读写 /api/emappings。 */
+let emappings = { entries: [] };
+async function loadEmappings() {
+  try {
+    emappings = await (await fetch("/api/emappings")).json();
+    renderEmappings();
+  } catch { toast("读取情绪映射失败", true); }
+}
+function renderEmappings() {
+  const list = $("emapping-list");
+  if (!(emappings.entries ?? []).length) {
+    list.innerHTML = '<div style="color:hsl(var(--muted-foreground));font-size:.75rem">暂无条目，点「加一个条目」。</div>';
+    return;
+  }
+  list.innerHTML = emappings.entries.map((e, i) => {
+    const items = (e.items ?? []).map((it, j) => {
+      const move = `<button class="btn btn-secondary btn-sm" onclick="moveEItem(${i},${j},-1)" ${j === 0 ? "disabled" : ""}>↑</button>
+          <button class="btn btn-secondary btn-sm" onclick="moveEItem(${i},${j},1)" ${j === (e.items.length - 1) ? "disabled" : ""}>↓</button>`;
+      if (it.type === "audio") {
+        return `<div class="memitem">${move}
+          <input type="text" value="${esc(it.label ?? "")}" data-e="${i}" data-j="${j}" data-k="label" placeholder="情绪标签（触发词）" style="max-width:10rem">
+          <select data-e="${i}" data-j="${j}" data-k="audio">
+            <option value="">— 选择库音频 —</option>
+            ${refItems.slice(0, 400).map((r) => `<option value="${esc(libValue(r))}" ${libValue(r) === `${it.root}|${it.rel}` ? "selected" : ""}>${esc(libLabel(r))}</option>`).join("")}
+          </select>
+          <label class="f" style="flex-direction:row;align-items:center;gap:.375rem" title="命中时该音频同时替换 prompt_speech（默认成员）">
+            <input type="checkbox" data-e="${i}" data-j="${j}" data-k="replace_default" style="width:auto" ${it.replace_default ? "checked" : ""}> 替换默认音色
+          </label>
+          <button class="btn btn-danger btn-sm" onclick="delEItem(${i},${j})">删</button>
+        </div>`;
+      }
+      if (it.type === "vector") {
+        return `<div class="memitem">${move}
+          <input type="text" value="${esc((it.triggers ?? []).join(","))}" data-e="${i}" data-j="${j}" data-k="triggers" placeholder="触发词（逗号分隔）" style="max-width:12rem">
+          <input type="text" value="${esc(JSON.stringify(it.vector ?? []))}" data-e="${i}" data-j="${j}" data-k="vector" placeholder="[1,0,0,0,0,0,0,0]" style="max-width:14rem">
+          <span style="font-size:.75rem;color:hsl(var(--muted-foreground))">向量</span>
+          <button class="btn btn-danger btn-sm" onclick="delEItem(${i},${j})">删</button>
+        </div>`;
+      }
+      return `<div class="memitem">${move}
+        <input type="text" value="${esc((it.triggers ?? []).join(","))}" data-e="${i}" data-j="${j}" data-k="triggers" placeholder="触发词（逗号分隔）" style="max-width:12rem">
+        <input type="text" value="${esc(it.text ?? "")}" data-e="${i}" data-j="${j}" data-k="text" placeholder="文字情感描述，如 calm and composed" style="flex:1;min-width:12rem">
+        <span style="font-size:.75rem;color:hsl(var(--muted-foreground))">文字</span>
+        <button class="btn btn-danger btn-sm" onclick="delEItem(${i},${j})">删</button>
+      </div>`;
+    }).join("");
+    return `<div class="membox">
+      <div class="grouphead">
+        <label class="f" style="min-width:14rem">绑定音色分组
+          <select data-e="${i}" data-k="group">
+            <option value="">— 选择分组 —</option>
+            ${(groups.groups ?? []).map((g) => `<option value="${esc(g.name)}" ${e.group === g.name ? "selected" : ""}>${esc(g.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="f" style="flex-direction:row;align-items:center;gap:.375rem" title="未命中任何子条目时：勾选=用整个 instructions 作文字情感；不勾=无情感控制">
+          <input type="checkbox" data-e="${i}" data-k="fallback_text" style="width:auto" ${e.fallback_text !== false ? "checked" : ""}> 未命中时用文字情感（整个 instructions）
+        </label>
+        <button class="btn btn-secondary btn-sm" onclick="importGroupMembers(${i})" title="把绑定分组的成员（标签-音频）导入为音频子条目">导入分组成员</button>
+        <button class="btn btn-danger btn-sm" onclick="delEmapping(${i})">删条目</button>
+      </div>
+      ${items || '<div style="font-size:.75rem;color:hsl(var(--muted-foreground))">暂无子条目。</div>'}
+      <div class="memitem">
+        <span style="font-size:.75rem;color:hsl(var(--muted-foreground))">加子条目：</span>
+        <button class="btn btn-secondary btn-sm" onclick="addEItem(${i},'audio')">情绪标签-音频</button>
+        <button class="btn btn-secondary btn-sm" onclick="addEItem(${i},'vector')">向量映射</button>
+        <button class="btn btn-secondary btn-sm" onclick="addEItem(${i},'text')">文字情感</button>
+      </div>
+    </div>`;
+  }).join("");
+  wireEmappingInputs();
+}
+function wireEmappingInputs() {
+  document.querySelectorAll("#emapping-list input[data-e], #emapping-list select[data-e]").forEach((inp) => {
+    inp.onchange = () => {
+      const i = +inp.dataset.e, j = inp.dataset.j;
+      const e = emappings.entries[i];
+      if (j === undefined) {
+        const k = inp.dataset.k;
+        if (k === "group") e.group = inp.value;
+        else if (k === "fallback_text") e.fallback_text = inp.checked;
+        return;
+      }
+      const it = e.items[+j], k = inp.dataset.k;
+      if (k === "label") it.label = inp.value.trim();
+      else if (k === "audio") { const [root, rel] = inp.value.split("|"); it.root = +root || 0; it.rel = rel ?? ""; }
+      else if (k === "replace_default") it.replace_default = inp.checked;
+      else if (k === "triggers") it.triggers = inp.value.split(/[,，]/).map((x) => x.trim()).filter(Boolean);
+      else if (k === "vector") { try { it.vector = JSON.parse(inp.value); } catch { toast("向量不是合法 JSON", true); } }
+      else if (k === "text") it.text = inp.value.trim();
+    };
+  });
+}
+function addEmapping() {
+  emappings.entries ??= [];
+  emappings.entries.push({ group: "", items: [], fallback_text: true });
+  renderEmappings();
+}
+function delEmapping(i) { emappings.entries.splice(i, 1); renderEmappings(); }
+function addEItem(i, type) {
+  const base = type === "audio" ? { type, label: "", root: 0, rel: "", replace_default: false }
+    : type === "vector" ? { type, triggers: [], vector: [0, 0, 0, 0, 0, 0, 0, 0] }
+    : { type, triggers: [], text: "" };
+  emappings.entries[i].items.push(base);
+  renderEmappings();
+}
+function delEItem(i, j) { emappings.entries[i].items.splice(j, 1); renderEmappings(); }
+function moveEItem(i, j, dir) {
+  const items = emappings.entries[i].items;
+  const t = j + dir;
+  if (t < 0 || t >= items.length) return;
+  [items[j], items[t]] = [items[t], items[j]];
+  renderEmappings();
+}
+function importGroupMembers(i) {
+  const e = emappings.entries[i];
+  const g = (groups.groups ?? []).find((x) => x.name === e.group);
+  if (!g) { toast("请先绑定音色分组", true); return; }
+  let added = 0;
+  for (const m of g.members ?? []) {
+    const key = `${m.root}|${m.rel}`;
+    if (e.items.some((it) => it.type === "audio" && `${it.root}|${it.rel}` === key && it.label === m.label)) continue;
+    e.items.push({ type: "audio", label: m.label ?? "", root: m.root ?? 0, rel: m.rel ?? "", replace_default: false });
+    added++;
+  }
+  renderEmappings();
+  toast(`已导入 ${added} 个分组成员为音频子条目`);
+}
+async function saveEmappings() {
+  const r = await (await fetch("/api/emappings", { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify(emappings) })).json();
+  emappings = r;
+  renderEmappings();
+  toast("情绪映射已保存");
+}
+
+/* ── 情绪映射页（旧规则编辑器，已停用保留；新页见上方 /api/emappings）── */
 async function loadEmotions() {
   try {
     emotions = await (await fetch("/api/emotions")).json();
@@ -1064,6 +1201,13 @@ const ADAPTER_MODE_DESCS = {
     + "差别：向量映射表（向量映射页配置）的触发词（子串命中 instructions + voice 剩余段，列表顺序首条生效）"
     + "命中时注入配置的 8 维情绪向量（emo_vector），替代同源音频引导；"
     + "未命中触发词则与切换音色完全一致。按请求覆盖：model 名含关键词 情绪向量/vector。",
+  emotion_map:
+    "情绪映射条目（情绪映射页配置）：条目绑定一个音色分组；子条目有序混排（情绪标签-音频 / 向量映射 / 文字情感），"
+    + "排序独立于音色分组。执行：instructions + voice 命中分组 → 取绑定条目 → voice 剩余词组 + instructions "
+    + "按子条目顺序子串命中，首个生效——音频子条目→该音频作情绪引导（勾「替换默认音色」则同时替换 prompt_speech）；"
+    + "向量→emo_vector；文字→emo_text。未命中任何子条目：条目勾选「未命中时用文字情感」→ 整个 instructions 作 "
+    + "emo_text；未勾选 → 无情感控制。prompt_speech 基准为分组默认成员。"
+    + "按请求覆盖：model 名含关键词 情绪映射/emotion_map。",
 };
 function renderModeDesc() {
   const v = $("def-mode").value;
