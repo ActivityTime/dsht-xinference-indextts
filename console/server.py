@@ -19,9 +19,11 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import shutil
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import requests
 from fastapi import FastAPI, Request
@@ -119,10 +121,8 @@ def _cache_evict():
         files.remove(oldest)
 
 
-@app.post("/api/tts")
-async def api_tts(request: Request):
-    """multipart 透传 + 同参数缓存 + 请求归档 + 日志。"""
-    t0 = time.perf_counter()
+async def _read_form(request: Request):
+    """multipart 解析：文本字段进 data，文件字段进 files，参考音频算内容哈希。"""
     form = await request.form()
     data, files = {}, {}
     ref_info = {"source": "unknown", "rel": None, "name": None, "sha256": None}
@@ -135,10 +135,14 @@ async def api_tts(request: Request):
                             "sha256": hashlib.sha256(content).hexdigest()[:16]}
         else:
             data[key] = value
+    return data, files, ref_info
 
-    cacheable = bool(files.get("prompt_speech"))
+
+async def _proxy_tts(data: dict, files: dict, ref_info: dict, adapter_report: dict | None = None):
+    """缓存 → 上游 → 归档 → 日志 → 响应（直接配置与 OpenAI 适配两条路共用）。"""
+    t0 = time.perf_counter()
     cache_key = None
-    if cacheable:
+    if files.get("prompt_speech"):
         try:
             kwargs_obj = json.loads(data.get("kwargs") or "{}")
         except json.JSONDecodeError:
@@ -152,9 +156,11 @@ async def api_tts(request: Request):
     hit_path = _cache_lookup(cache_key) if cache_key else None
     if hit_path is not None:
         logger.info("CACHE HIT %s input=%r", cache_key[:12], data.get("input", "")[:60])
+        headers = {"X-Cache": "hit", "X-Cache-Key": cache_key}
+        if adapter_report is not None:
+            headers["X-Adapter-Report"] = quote(json.dumps(adapter_report, ensure_ascii=False))
         return Response(content=hit_path.read_bytes(), status_code=200,
-                        media_type="application/octet-stream",
-                        headers={"X-Cache": "hit", "X-Cache-Key": cache_key})
+                        media_type="application/octet-stream", headers=headers)
 
     if not files.get("prompt_speech"):
         return JSONResponse({"detail": "缺少 prompt_speech（参考音频）"}, status_code=400)
@@ -189,7 +195,8 @@ async def api_tts(request: Request):
                 "input": data.get("input"), "voice": data.get("voice"), "speed": data.get("speed"),
                 "kwargs_raw": data.get("kwargs"), "ref": ref_info, "status": upstream.status_code,
                 "bytes": len(upstream.content), "upstream_ms": upstream_ms, "total_ms": total_ms,
-                "cache": "miss", "cache_key": cache_key, "audio": audio_name}
+                "cache": "miss", "cache_key": cache_key, "audio": audio_name,
+                "adapter": adapter_report}
         (hdir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
         _prune_history()
     except OSError as e:  # 归档失败不阻塞请求
@@ -210,9 +217,116 @@ async def api_tts(request: Request):
     logger.info("TTS status=%d upstream_ms=%s total_ms=%d bytes=%d input=%r",
                 upstream.status_code, upstream_ms, total_ms, len(upstream.content),
                 str(data.get("input", ""))[:60])
+    headers = {"X-Cache": "miss", "X-Cache-Key": cache_key or ""}
+    if adapter_report is not None:
+        headers["X-Adapter-Report"] = quote(json.dumps(adapter_report, ensure_ascii=False))
     return Response(content=upstream.content, status_code=upstream.status_code,
                     media_type=upstream.headers.get("content-type", "application/octet-stream"),
-                    headers={"X-Cache": "miss", "X-Cache-Key": cache_key or ""})
+                    headers=headers)
+
+
+@app.post("/api/tts")
+async def api_tts(request: Request):
+    """直接配置路：multipart 透传（客户端组装全部字段），缓存 + 归档 + 日志。不做任何文本解析。"""
+    data, files, ref_info = await _read_form(request)
+    return await _proxy_tts(data, files, ref_info)
+
+
+# ────────────────────────── OpenAI 适配层（对齐 K:\OmniVoice 的适配语义） ──────────────────────────
+#
+# DSHT/调用方按 OpenAI 兼容字段发请求：input 可携带情绪指令「用X的语气说这句话。」，
+# voice 可填音色分组名。适配层依次：
+#   ① 剥指令壳取情绪词（正则同 OmniVoice strip_style_sentence）；
+#   ② 情绪映射表按短语最长匹配（命中短语从合成文本剥离，避免被朗读）；
+#   ③ 命中规则 → 情感动作（向量/文字）注入 kwargs（调用方显式给的 emo_* 优先）；
+#   ④ voice=分组名 → 按情绪标签联动组内成员（无标签/未命中用默认成员）取参考音频。
+# 调用方在 kwargs 里显式给的参数永远优先，适配层只补空缺。
+
+DSH_INSTRUCTION_RE = re.compile(
+    r"^\s*用\s*([^，,。；;！!？?\s]{1,12}?)\s*的?\s*语气\s*"
+    r"(?:(?:说|讲|念|朗读|读)\s*)?(?:这?句话?|这句话|这句|话)?\s*[。.！!？?]?\s*")
+
+
+@app.post("/api/tts/adapter")
+async def api_tts_adapter(request: Request):
+    data, files, ref_info = await _read_form(request)
+    report = {"residual": None, "tag": "", "emotion": None, "voice_resolved": None, "stripped": []}
+    try:
+        kwargs = json.loads(data.get("kwargs") or "{}")
+        if not isinstance(kwargs, dict):
+            kwargs = {}
+    except json.JSONDecodeError:
+        kwargs = {}
+
+    text = str(data.get("input") or "")
+    m = DSH_INSTRUCTION_RE.match(text)
+    if m:
+        tag = m.group(1)
+        text = text[m.end():]
+        report["stripped"].append({"kind": "instruction", "value": tag})
+
+    # 情绪映射表：短语最长匹配（对残余文本）+ 指令词/联动标签对齐
+    emap = api_emotions_get()
+    rules = sorted(emap.get("rules", []),
+                   key=lambda r: max([len(p) for p in r.get("phrases", [])] or [0]), reverse=True)
+    hit = None
+    for r in rules:
+        phrases = sorted(r.get("phrases", []), key=len, reverse=True)
+        for p in phrases:
+            if p and p in text:
+                hit = r
+                break
+        if hit is None and tag and (r.get("tag") or "").lower() == tag.lower():
+            hit = r
+        if hit is not None:
+            break
+    if hit is not None:
+        tag = hit.get("tag") or tag
+        for p in hit.get("phrases", []):
+            if p and p in text:
+                text = text.replace(p, "")
+                report["stripped"].append({"kind": "phrase", "value": p})
+
+    if hit is not None and hit.get("action") in ("vector", "text") \
+            and not any(k in kwargs for k in ("emo_vector", "use_emo_text", "emo_prompt_speech_b64")):
+        if hit["action"] == "vector":
+            kwargs["emo_vector"] = hit.get("vector") or [0, 0, 0, 0, 0, 0, 0, 0]
+        else:
+            kwargs["use_emo_text"] = True
+            kwargs["emo_text"] = hit.get("text", "")
+        kwargs.setdefault("emo_alpha", hit.get("alpha", 1.0))
+        report["emotion"] = {"tag": tag, "action": hit["action"]}
+
+    data["input"] = text.strip() or data.get("input", "")
+    report["residual"] = data["input"]
+    kwargs.setdefault("language", "ZH")
+    data["kwargs"] = json.dumps(kwargs, ensure_ascii=False)
+
+    # voice 解析：分组名 → 情绪标签联动成员（回退默认）；给了 prompt_speech 则 voice 不参与
+    voice = str(data.get("voice") or "").strip()
+    if not files.get("prompt_speech") and voice and voice != "default":
+        group = next((g for g in _load_config("groups", {"groups": []}).get("groups", [])
+                      if g.get("name") == voice), None)
+        members = (group or {}).get("members", [])
+        member = next((mm for mm in members
+                       if str(mm.get("label", "")).lower() == tag.lower()), None) \
+            or next((mm for mm in members if mm.get("is_default")), None) \
+            or (members[0] if members else None)
+        if member is not None:
+            roots = _load_library()
+            ri = int(member.get("root", 0))
+            if 0 <= ri < len(roots):
+                path = Path(roots[ri]["path"]) / str(member.get("rel", ""))
+                if path.is_file():
+                    files["prompt_speech"] = (path.name, path.read_bytes(), "application/octet-stream")
+                    ref_info = {"source": "group", "rel": str(member.get("rel", "")),
+                                "name": voice, "sha256": _sha256_file(path)[:16]}
+                    report["voice_resolved"] = f"{voice} · {member.get('label', '')}"
+    if not files.get("prompt_speech"):
+        return JSONResponse(
+            {"detail": "OpenAI 适配：voice 未命中音色分组且未上传 prompt_speech，无法合成", "report": report},
+            status_code=400)
+    return await _proxy_tts(data, files, ref_info, adapter_report=report)
 
 
 def _prune_history():
@@ -418,19 +532,25 @@ def _save_config(name: str, value):
 
 @app.get("/api/settings")
 def api_settings_get():
-    return _load_config("settings", {
+    value = _load_config("settings", {
         "lang": "ZH", "speed": 1.0, "response_format": "wav", "emo_alpha": 1.0,
-        "auto_emotion": True,
+        "parse_instruction": True,
     })
+    # 迁移：v1 的 auto_emotion（关键词自动匹配，已废弃）→ parse_instruction（DSHT 情绪指令解析）
+    if "parse_instruction" not in value and "auto_emotion" in value:
+        value["parse_instruction"] = bool(value.pop("auto_emotion"))
+    return value
 
 
 @app.post("/api/settings")
 async def api_settings_save(request: Request):
     body = await request.json()
     value = _load_config("settings", {})
-    for k in ("lang", "speed", "response_format", "emo_alpha", "auto_emotion"):
+    for k in ("lang", "speed", "response_format", "emo_alpha", "parse_instruction", "auto_emotion"):
         if k in body:
             value[k] = body[k]
+    if "auto_emotion" in value:  # 保存时完成迁移
+        value["parse_instruction"] = bool(value.pop("auto_emotion"))
     _save_config("settings", value)
     return value
 
@@ -460,7 +580,18 @@ async def api_ttsform_save(request: Request):
 
 @app.get("/api/emotions")
 def api_emotions_get():
-    return _load_config("emotions", {"rules": []})
+    return _migrate_emotions(_load_config("emotions", {"rules": []}))
+
+
+def _migrate_emotions(value):
+    """v1 规则（name/keywords/…）→ v2（phrases/tag/action），对齐 OmniVoice 语义。"""
+    for r in value.get("rules", []):
+        if "keywords" in r:
+            r["phrases"] = r.pop("keywords")
+        if "name" in r and "tag" not in r:
+            r["tag"] = r.pop("name")
+        r.setdefault("action", "none")
+    return value
 
 
 @app.post("/api/emotions")
@@ -468,10 +599,10 @@ async def api_emotions_save(request: Request):
     body = await request.json()
     rules = body.get("rules", [])
     for r in rules:
-        r["name"] = str(r.get("name", "")).strip()
-        r["keywords"] = [k.strip() for k in r.get("keywords", []) if str(k).strip()]
-        if r.get("action") not in ("vector", "text"):
-            r["action"] = "vector"
+        r["phrases"] = [p.strip() for p in r.get("phrases", []) if str(p).strip()]
+        r["tag"] = str(r.get("tag", "")).strip()
+        if r.get("action") not in ("none", "vector", "text"):
+            r["action"] = "none"
         if r["action"] == "vector" and not isinstance(r.get("vector"), list):
             r["vector"] = [0, 0, 0, 0, 0, 0, 0, 0]
         if r["action"] == "text":

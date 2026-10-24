@@ -162,7 +162,19 @@ textarea{resize:vertical;min-height:6rem}
     <!-- 合成页 -->
     <section class="page" id="page-tts">
       <h2 class="page-title">语音合成</h2>
-      <p class="page-sub">同参数自动缓存命中；每次请求自动归档；情绪映射命中关键词自动应用。</p>
+      <p class="page-sub">同参数自动缓存命中；每次请求自动归档。</p>
+      <div class="card">
+        <div class="row">
+          <label class="f" style="min-width:18rem">合成方式
+            <select id="tts-page-mode" onchange="renderPageMode()">
+              <option value="direct" selected>直接配置（IndexTTS-2.5 原生参数）</option>
+              <option value="adapter">OpenAI 适配（API 请求字段，行为与 API 调用一致）</option>
+            </select>
+          </label>
+          <span id="mode-hint" style="font-size:.75rem;color:hsl(var(--muted-foreground))">手动选参考音频与情感，所见即所得。</span>
+        </div>
+      </div>
+      <div id="direct-box">
       <div class="card">
         <h3>输入</h3>
         <label class="f">合成文本（情绪映射按此处关键词自动匹配）
@@ -222,7 +234,6 @@ textarea{resize:vertical;min-height:6rem}
           <label class="f" style="min-width:13rem">模式
             <select id="emo-mode" onchange="renderEmoMode()">
               <option value="none" selected>无（不干预，跟随参考音频情绪）</option>
-              <option value="auto">自动（按关键词映射，需开启自动开关）</option>
               <option value="vector">情感向量（8 维手动）</option>
               <option value="text">文字情感描述（Qwen）</option>
               <option value="audio">音频引导（情感参考音频）</option>
@@ -230,12 +241,6 @@ textarea{resize:vertical;min-height:6rem}
           </label>
           <label class="f" style="min-width:8rem">emo_alpha（0–1）
             <input type="number" id="emo-alpha" value="1.0" step="0.05" min="0" max="1">
-          </label>
-          <label class="f" style="min-width:13rem">情绪映射（快速应用）
-            <select id="emo-rule" onchange="applyRule(false)"><option value="">— 选择映射规则 —</option></select>
-          </label>
-          <label class="f" style="min-width:9rem;flex-direction:row;align-items:center;gap:.375rem">按关键词自动
-            <input type="checkbox" id="emo-auto" checked style="width:auto">
           </label>
         </div>
         <div id="emo-vector-box" style="display:none;margin-top:.75rem">
@@ -265,6 +270,40 @@ textarea{resize:vertical;min-height:6rem}
           </label>
         </div>
       </div>
+      </div><!-- /direct-box -->
+      <div id="adapter-box" style="display:none">
+        <div class="card">
+          <h3>请求字段（与 /v1/audio/speech 一致；服务端执行 DSHT 适配层）</h3>
+          <label class="f">input（支持 DSHT 情绪指令：用开心的语气说这句话。）
+            <textarea id="ad-input" placeholder="用开心的语气说这句话。大家好，欢迎体验……"></textarea>
+          </label>
+          <div class="grid2" style="margin-top:.75rem">
+            <label class="f">voice（default，或音色分组名——按情绪标签联动组内成员）
+              <input type="text" id="ad-voice" value="default" list="ad-voice-list">
+              <datalist id="ad-voice-list"></datalist>
+            </label>
+            <label class="f">response_format
+              <select id="ad-fmt"><option value="wav">wav</option><option value="mp3">mp3</option></select>
+            </label>
+            <label class="f">speed（0.5–2.0）
+              <input type="number" id="ad-speed" value="1.0" step="0.05" min="0.5" max="2.0">
+            </label>
+            <label class="f">stream（适配路固定 false）
+              <input type="text" id="ad-stream" value="false" readonly>
+            </label>
+          </div>
+          <label class="f" style="margin-top:.75rem">kwargs JSON（可选；显式 emo_vector / use_emo_text / emo_prompt_speech_b64 优先于情绪映射）
+            <textarea id="ad-kwargs" style="min-height:3.5rem" placeholder='{"language":"ZH"}'></textarea>
+          </label>
+          <label class="f" style="margin-top:.75rem">prompt_speech 文件（voice=default 或未命中分组时必填）
+            <input type="file" id="ad-ref-file" accept=".wav,.mp3,.flac,.ogg,audio/*" style="font-size:.75rem">
+          </label>
+        </div>
+        <div class="card">
+          <h3>适配报告</h3>
+          <div class="log" id="ad-report" style="display:none"></div>
+        </div>
+      </div>
       <div class="card">
         <h3>输出</h3>
         <div class="row">
@@ -272,7 +311,7 @@ textarea{resize:vertical;min-height:6rem}
           <select id="tts-fmt" style="width:6rem"><option value="wav">wav</option><option value="mp3">mp3</option></select>
           <span id="tts-meta" style="font-size:.75rem;color:hsl(var(--muted-foreground))"></span>
           <span class="pill" id="pill-cache" style="display:none"><span class="dot"></span><span id="cache-text"></span></span>
-          <button class="btn btn-secondary" style="margin-left:auto" onclick="saveAsDefault()" title="把本页全部选项的当前状态存为默认填写（刷新自动套用）">存为合成页默认填写</button>
+          <button class="btn btn-secondary" id="btn-save-default" style="margin-left:auto" onclick="saveAsDefault()" title="把直接配置页全部选项的当前状态存为默认填写（刷新自动套用）">存为合成页默认填写</button>
         </div>
         <div id="tts-result" style="display:none;margin-top:.75rem">
           <audio class="audio-out" id="tts-audio" controls></audio>
@@ -361,8 +400,8 @@ textarea{resize:vertical;min-height:6rem}
           </label>
         </div>
         <div class="row" style="margin-top:.75rem">
-          <label class="f" style="flex-direction:row;align-items:center;gap:.375rem">按关键词自动应用情绪映射
-            <input type="checkbox" id="def-auto" style="width:auto">
+          <label class="f" style="flex-direction:row;align-items:center;gap:.375rem">OpenAI 适配：解析 DSHT 情绪指令
+            <input type="checkbox" id="def-parse" style="width:auto">
           </label>
           <button class="btn btn-primary" style="margin-left:auto" onclick="saveDefaults()">保存默认参数</button>
         </div>
@@ -648,40 +687,13 @@ function renderEmoMode() {
 }
 function renderEmoAudioOptions() { fillPicker("emo-audio-lib", $("emo-audio-filter").value); }
 function setEmo(v) { $("emo-vector").value = v; }
-function renderEmoRuleOptions() {
-  $("emo-rule").innerHTML = '<option value="">— 选择映射规则 —</option>' +
-    (emotions.rules ?? []).map((r, i) => `<option value="${i}">${esc(r.name)}（${esc((r.keywords ?? []).join("/"))}）</option>`).join("");
-}
-function applyRule(fromAuto) {
-  const idx = $("emo-rule").value;
-  if (idx === "") return;
-  const r = emotions.rules[+idx];
-  if (!r) return;
-  if (r.action === "vector") {
-    $("emo-mode").value = "vector"; renderEmoMode();
-    $("emo-vector").value = JSON.stringify(r.vector ?? [0,0,0,0,0,0,0,0]);
-  } else {
-    $("emo-mode").value = "text"; renderEmoMode();
-    $("emo-text").value = r.text ?? "";
-  }
-  if (r.alpha !== undefined) $("emo-alpha").value = r.alpha;
-  if (!fromAuto) toast("已应用映射规则：" + r.name);
-}
-function matchEmotionRule(text) {
-  const t = String(text ?? "");
-  for (const r of (emotions.rules ?? [])) {
-    for (const kw of (r.keywords ?? [])) {
-      if (kw && t.includes(kw)) return r;
-    }
-  }
-  return null;
-}
 
-/* ── 情绪映射页 ── */
+
+/* ── 情绪映射页（OmniVoice 语义：短语 → 联动标签 tag + 动作） ── */
 async function loadEmotions() {
   try {
     emotions = await (await fetch("/api/emotions")).json();
-    renderEmoRules(); renderEmoRuleOptions();
+    renderEmoRules();
   } catch { toast("读取情绪映射失败", true); }
 }
 function renderEmoRules() {
@@ -689,19 +701,20 @@ function renderEmoRules() {
   if (!(emotions.rules ?? []).length) { box.innerHTML = '<div style="color:hsl(var(--muted-foreground));font-size:.75rem">暂无规则，点「加一条规则」。</div>'; return; }
   box.innerHTML = emotions.rules.map((r, i) =>
     `<div class="ruleitem" style="flex-wrap:wrap;align-items:flex-end">
-      <label class="f" style="width:9rem">规则名
-        <input type="text" value="${esc(r.name)}" data-i="${i}" data-k="name">
+      <label class="f" style="width:14rem">触发短语（逗号分隔，最长匹配）
+        <input type="text" value="${esc((r.phrases ?? []).join(","))}" data-i="${i}" data-k="phrases">
       </label>
-      <label class="f" style="width:14rem">关键词（逗号分隔）
-        <input type="text" value="${esc((r.keywords ?? []).join(","))}" data-i="${i}" data-k="kw">
+      <label class="f" style="width:8rem" title="联动音色分组：成员情绪标签与此标签一致时自动切该成员">联动标签
+        <input type="text" value="${esc(r.tag ?? "")}" data-i="${i}" data-k="tag">
       </label>
-      <label class="f" style="width:9rem">动作
+      <label class="f" style="width:9rem">情感动作
         <select data-i="${i}" data-k="action">
+          <option value="none" ${r.action === "none" ? "selected" : ""}>仅联动（不改情感）</option>
           <option value="vector" ${r.action === "vector" ? "selected" : ""}>情感向量</option>
           <option value="text" ${r.action === "text" ? "selected" : ""}>文字情感</option>
         </select>
       </label>
-      <label class="f" style="width:17rem" data-show="${i}">${r.action === "vector" ? "向量" : "情感描述"}
+      <label class="f" style="width:16rem" data-show="${i}">${r.action === "vector" ? "向量" : "情感描述"}
         <input type="text" value="${esc(r.action === "vector" ? JSON.stringify(r.vector ?? []) : (r.text ?? ""))}" data-i="${i}" data-k="value">
       </label>
       <label class="f" style="width:5rem">alpha
@@ -712,29 +725,28 @@ function renderEmoRules() {
   box.querySelectorAll("input,select").forEach((inp) => {
     inp.onchange = () => {
       const i = +inp.dataset.i, k = inp.dataset.k, r = emotions.rules[i];
-      if (k === "name") r.name = inp.value;
-      else if (k === "kw") r.keywords = inp.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+      if (k === "phrases") r.phrases = inp.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+      else if (k === "tag") r.tag = inp.value.trim();
       else if (k === "action") { r.action = inp.value; renderEmoRules(); }
       else if (k === "alpha") r.alpha = parseFloat(inp.value) || 1.0;
       else if (k === "value") {
         if (r.action === "vector") { try { r.vector = JSON.parse(inp.value); } catch { toast("向量不是合法 JSON", true); } }
         else r.text = inp.value;
       }
-      renderEmoRuleOptions();
     };
   });
 }
 function addEmoRule() {
   emotions.rules ??= [];
-  emotions.rules.push({ name: "新规则", keywords: [], action: "vector", vector: [1,0,0,0,0,0,0,0], alpha: 1.0 });
+  emotions.rules.push({ phrases: [], tag: "", action: "none", vector: [1,0,0,0,0,0,0,0], text: "", alpha: 1.0 });
   renderEmoRules();
 }
-function delEmoRule(i) { emotions.rules.splice(i, 1); renderEmoRules(); renderEmoRuleOptions(); }
+function delEmoRule(i) { emotions.rules.splice(i, 1); renderEmoRules(); }
 async function saveEmotions() {
   const r = await (await fetch("/api/emotions", { method: "POST",
     headers: { "content-type": "application/json" }, body: JSON.stringify(emotions) })).json();
   emotions = r;
-  renderEmoRules(); renderEmoRuleOptions();
+  renderEmoRules();
   toast("情绪映射已保存");
 }
 
@@ -749,6 +761,9 @@ async function loadGroups() {
 function renderGroupSelect() {
   $("tts-group").innerHTML = '<option value="">— 选择分组 —</option>' +
     (groups.groups ?? []).map((g) => `<option value="${esc(g.name)}">${esc(g.name)}</option>`).join("");
+  // OpenAI 适配页的 voice 候选：default + 分组名
+  $("ad-voice-list").innerHTML = '<option value="default"></option>' +
+    (groups.groups ?? []).map((g) => `<option value="${esc(g.name)}"></option>`).join("");
   renderGroupMembers();
 }
 function renderGroups() {
@@ -821,7 +836,7 @@ async function loadApiPage() {
     $("def-speed").value = s.speed ?? 1.0;
     $("def-fmt").value = s.response_format ?? "wav";
     $("def-alpha").value = s.emo_alpha ?? 1.0;
-    $("def-auto").checked = s.auto_emotion !== false;
+    $("def-parse").checked = s.parse_instruction !== false;
   } catch { toast("读取默认参数失败", true); }
   try {
     const cfg = await (await fetch("/api/config")).json();
@@ -837,7 +852,7 @@ async function saveDefaults() {
   const body = {
     lang: $("def-lang").value, speed: parseFloat($("def-speed").value) || 1.0,
     response_format: $("def-fmt").value, emo_alpha: parseFloat($("def-alpha").value) || 1.0,
-    auto_emotion: $("def-auto").checked,
+    parse_instruction: $("def-parse").checked,
   };
   await (await fetch("/api/settings", { method: "POST",
     headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
@@ -849,10 +864,10 @@ function collectTtsForm() {
     input: $("tts-text").value,
     lang: $("tts-lang").value, speed: parseFloat($("tts-speed").value) || 1.0,
     response_format: $("tts-fmt").value, emo_alpha: parseFloat($("emo-alpha").value) || 1.0,
-    auto_emotion: $("emo-auto").checked, emo_mode: $("emo-mode").value,
+    emo_mode: $("emo-mode").value,
     ref_mode: $("ref-mode").value, ref_lib: $("tts-ref").value,
     ref_group: $("tts-group").value, ref_group_member: $("tts-group-member").value,
-    emo_audio_lib: $("emo-audio-lib").value, emo_rule: ($("emo-rule").selectedOptions[0] ?? {}).textContent ?? "",
+    emo_audio_lib: $("emo-audio-lib").value,
   };
 }
 async function applyDefaultsToForm() {
@@ -863,7 +878,6 @@ async function applyDefaultsToForm() {
   $("tts-speed").value = s.speed ?? 1.0;
   $("tts-fmt").value = s.response_format ?? "wav";
   $("emo-alpha").value = s.emo_alpha ?? 1.0;
-  $("emo-auto").checked = s.auto_emotion !== false;
   // 音色来源（已存项可能被搜索过滤/条数上限截掉 → ensureOption 自动注入）
   $("ref-mode").value = s.ref_mode ?? "lib"; renderRefMode();
   ensureOption("tts-ref", s.ref_lib);
@@ -877,11 +891,6 @@ async function applyDefaultsToForm() {
   if (s.emo_audio_lib) {
     fillPicker("emo-audio-lib", $("emo-audio-filter").value);
     ensureOption("emo-audio-lib", s.emo_audio_lib);
-  }
-  // 情绪映射规则（按规则名回选）
-  if (s.emo_rule) {
-    const opt = [...$("emo-rule").options].find((o) => o.textContent.startsWith(s.emo_rule));
-    if (opt) $("emo-rule").value = opt.value;
   }
 }
 async function saveAsDefault() {
@@ -922,7 +931,23 @@ async function delHistory(id) {
 }
 
 /* ── 合成 ── */
-async function doTts() {
+/* ── 合成入口：按页面模式分发 ── */
+function doTts() {
+  if ($("tts-page-mode").value === "adapter") return doAdapter();
+  return doTtsDirect();
+}
+function renderPageMode() {
+  const adapter = $("tts-page-mode").value === "adapter";
+  $("direct-box").style.display = adapter ? "none" : "";
+  $("adapter-box").style.display = adapter ? "" : "none";
+  $("btn-save-default").style.display = adapter ? "none" : "";
+  $("mode-hint").textContent = adapter
+    ? "填 API 请求字段；服务端适配层剥指令壳、查情绪映射、按分组联动成员。"
+    : "手动选参考音频与情感，所见即所得。";
+}
+
+/* ── 直接配置合成（IndexTTS-2.5 原生，无任何文本解析） ── */
+async function doTtsDirect() {
   const btn = $("tts-go");
   const text = $("tts-text").value.trim();
   if (!text) { toast("请输入文本", true); return; }
@@ -935,26 +960,9 @@ async function doTts() {
     toast(refMode === "group" ? "请选择分组与成员" : "请选择参考音频", true);
     return;
   }
-  // 自动情绪映射：仅当选中「自动」模式（「无」= 明确不干预，绝不被覆盖）
   const kwargs = { language: $("tts-lang").value };
-  let autoApplied = null;
-  if ($("emo-auto").checked && $("emo-mode").value === "auto") {
-    const rule = matchEmotionRule(text);
-    if (rule) {
-      autoApplied = rule.name;
-      if (rule.action === "vector") {
-        kwargs.emo_vector = rule.vector ?? [0,0,0,0,0,0,0,0];
-      } else {
-        kwargs.use_emo_text = true;
-        kwargs.emo_text = rule.text ?? text;
-      }
-      if (rule.alpha !== undefined) {
-        kwargs.emo_alpha = rule.alpha;
-      }
-    }
-  }
   const emoAlpha = parseFloat($("emo-alpha").value);
-  if (Number.isFinite(emoAlpha) && autoApplied === null && emoAlpha !== 1.0) kwargs.emo_alpha = emoAlpha;
+  if (Number.isFinite(emoAlpha) && emoAlpha !== 1.0) kwargs.emo_alpha = emoAlpha;
   const mode = $("emo-mode").value;
   if (mode === "vector") {
     try { kwargs.emo_vector = JSON.parse($("emo-vector").value); }
@@ -1010,13 +1018,67 @@ async function doTts() {
     $("tts-audio").src = url;
     $("tts-dl").href = url;
     $("tts-dl").download = "tts-" + Date.now() + "." + $("tts-fmt").value;
-    $("tts-meta").textContent = `${sec}s · ${fmtBytes(blob.size)} · ${kwargs.language}` + (autoApplied ? ` · 自动情绪:${autoApplied}` : "");
+    $("tts-meta").textContent = `${sec}s · ${fmtBytes(blob.size)} · ${kwargs.language}`;
     $("pill-cache").style.display = "";
     setPill("pill-cache", "cache-text", cached ? "ok" : "warn", cached ? "缓存命中" : "新合成（已入缓存）");
-    log.textContent = `${cached ? "CACHE HIT" : "OK"} ${sec}s, ${fmtBytes(blob.size)}, mode=${mode}` + (autoApplied ? ` (auto:${autoApplied})` : "");
+    log.textContent = `${cached ? "CACHE HIT" : "OK"} ${sec}s, ${fmtBytes(blob.size)}, mode=${mode}`;
   } catch (e) {
     log.textContent = "请求失败：" + e;
     toast("合成请求失败（控制台服务未启动？）", true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ── OpenAI 适配合成（请求字段 + 服务端适配层） ── */
+async function doAdapter() {
+  const btn = $("tts-go");
+  const text = $("ad-input").value.trim();
+  if (!text) { toast("请填写 input", true); return; }
+  const kwargsRaw = $("ad-kwargs").value.trim();
+  if (kwargsRaw) { try { JSON.parse(kwargsRaw); } catch { toast("kwargs 不是合法 JSON", true); return; } }
+  const form = new FormData();
+  form.append("model", "IndexTTS-2.5");
+  form.append("input", text);
+  form.append("voice", $("ad-voice").value.trim() || "default");
+  form.append("response_format", $("ad-fmt").value);
+  form.append("stream", "false");
+  form.append("speed", String($("ad-speed").value || "1.0"));
+  if (kwargsRaw) form.append("kwargs", kwargsRaw);
+  const f = $("ad-ref-file").files[0];
+  if (f) form.append("prompt_speech", f, f.name);
+
+  btn.disabled = true;
+  const log = $("tts-log"); log.style.display = ""; log.textContent = "适配合成中…（指令解析/分组联动在服务端执行）";
+  $("pill-cache").style.display = "none"; $("ad-report").style.display = "none";
+  const t0 = performance.now();
+  try {
+    const r = await fetch("/api/tts/adapter", { method: "POST", body: form });
+    const sec = ((performance.now() - t0) / 1000).toFixed(1);
+    if (!r.ok) {
+      const detail = (await r.text()).slice(0, 600);
+      log.textContent = `HTTP ${r.status}\n${detail}`;
+      toast("适配合成失败 HTTP " + r.status, true);
+      return;
+    }
+    let report = {};
+    try { report = JSON.parse(decodeURIComponent(r.headers.get("X-Adapter-Report") || "{}")); } catch {}
+    const cached = r.headers.get("X-Cache") === "hit";
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    $("tts-result").style.display = "";
+    $("tts-audio").src = url;
+    $("tts-dl").href = url;
+    $("tts-dl").download = "tts-" + Date.now() + "." + $("ad-fmt").value;
+    $("tts-meta").textContent = `${sec}s · ${fmtBytes(blob.size)}`;
+    $("pill-cache").style.display = "";
+    setPill("pill-cache", "cache-text", cached ? "ok" : "warn", cached ? "缓存命中" : "新合成（已入缓存）");
+    $("ad-report").style.display = "";
+    $("ad-report").textContent = JSON.stringify(report, null, 1);
+    log.textContent = `ADAPTER ${cached ? "CACHE HIT" : "OK"} ${sec}s, ${fmtBytes(blob.size)}`;
+  } catch (e) {
+    log.textContent = "请求失败：" + e;
+    toast("适配合成请求失败（控制台服务未启动？）", true);
   } finally {
     btn.disabled = false;
   }
