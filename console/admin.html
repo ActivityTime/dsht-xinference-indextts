@@ -278,7 +278,7 @@ textarea{resize:vertical;min-height:6rem}
       </div><!-- /direct-box -->
       <div id="adapter-box" style="display:none">
         <div class="card">
-          <h3>请求字段（与 /v1/audio/speech 一致；服务端执行 DSHT 适配层）</h3>
+          <h3>标准 API 请求字段（POST /v1/audio/speech；服务端执行 DSHT 适配层）</h3>
           <label class="f">instructions（OpenAI 标准字段：情绪指令「用X的语气说这句话。」或裸短语「温柔地」；适配层剥壳查映射）
             <input type="text" id="ad-instructions" placeholder="可选，如：用开心的语气说这句话。">
           </label>
@@ -1086,7 +1086,7 @@ function renderPageMode() {
   $("btn-save-adapter").style.display = adapter ? "" : "none";
   $("tts-fmt").style.display = adapter ? "none" : "";
   $("mode-hint").textContent = adapter
-    ? "填 API 请求字段；服务端适配层剥指令壳、查情绪映射、按分组联动成员。"
+    ? "发起标准 API 请求（POST /v1/audio/speech）；服务端适配层剥指令壳、查情绪映射、voice 逗号组合、按默认模式联动分组/情感——与真实 API 调用行为一致。"
     : "手动选参考音频与情感，所见即所得。";
 }
 
@@ -1232,7 +1232,8 @@ async function doAdapter() {
   $("pill-cache").style.display = "none"; $("ad-report").style.display = "none";
   const t0 = performance.now();
   try {
-    const r = await fetch("/api/tts/adapter", { method: "POST", body: form });
+    // 标准 API 请求：与真实调用方同端点同行为（服务端适配层在此生效）
+    const r = await fetch("/v1/audio/speech", { method: "POST", body: form });
     const sec = ((performance.now() - t0) / 1000).toFixed(1);
     if (!r.ok) {
       const detail = (await r.text()).slice(0, 600);

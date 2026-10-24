@@ -250,8 +250,11 @@ DSH_INSTRUCTION_RE = re.compile(
     r"(?:(?:说|讲|念|朗读|读)\s*)?(?:这?句话?|这句话|这句|话)?\s*[。.！!？?]?\s*")
 
 
+@app.post("/v1/audio/speech")
 @app.post("/api/tts/adapter")
 async def api_tts_adapter(request: Request):
+    # 标准端点：OpenAI JSON 载体（DSHT/通用客户端）与 xinference multipart 载体
+    # （prompt_speech 文件）都接受——适配层是为 API 准备的，两条路行为完全一致。
     """OpenAI 适配层（语义逐条对齐，#38 起分模式定义）。
 
     请求字段：model(忽略,路由本机模型) / input(纯正文) / instructions / voice /
@@ -268,7 +271,16 @@ async def api_tts_adapter(request: Request):
     【guide_audio / group_switch】保持 #37 语义（见下方分支实现）。
     优先级：内联 > 调用方显式 kwargs > 模式默认行为。
     """
-    data, files, ref_info = await _read_form(request)
+    ctype = request.headers.get("content-type", "")
+    if "multipart/form-data" in ctype:
+        data, files, ref_info = await _read_form(request)
+    else:
+        body = await request.json()
+        data = {}
+        for k, v in body.items():
+            data[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+        files = {}
+        ref_info = {"source": "json", "rel": None, "name": None, "sha256": None}
     report = {"residual": None, "tag": "", "instruction": "", "emotion": None,
               "voice_resolved": None, "stripped": [], "inline": {}, "mode": None,
               "model": {"in": str(data.get("model") or ""), "used": MODEL_NAME}}
