@@ -261,7 +261,9 @@ DSH_INSTRUCTION_RE = re.compile(
 
 
 def rules_for_adapter():
-    return api_emotions_get().get("rules", [])
+    # #49：情绪映射「通用拦截」已停用（各模式不再自动匹配正文/voice 短语注入情感），
+    # 等待重新设计。映射页与 /api/emotions 端点保留可编辑，仅适配层不再消费。
+    return []
 
 
 @app.post("/v1/audio/speech")
