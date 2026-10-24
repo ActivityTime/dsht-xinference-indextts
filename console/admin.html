@@ -291,7 +291,8 @@ textarea{resize:vertical;min-height:6rem}
               model（DSHT 兼容可填 gpt-4o-mini-tts，适配层忽略并路由到本机模型）
               <input type="text" id="ad-model" value="IndexTTS-2.5">
             </label>
-            <label class="f">voice（default，或音色分组名——按情绪标签联动组内成员）
+            <label class="f" title="支持逗号组合：「分组名,情绪词」（情绪词查情绪映射表）；#[音色分组][名] 内联可覆盖">
+              voice（default / 分组名 / 「分组名,情绪词」逗号组合）
               <input type="text" id="ad-voice" value="default" list="ad-voice-list">
               <datalist id="ad-voice-list"></datalist>
             </label>
@@ -420,7 +421,14 @@ textarea{resize:vertical;min-height:6rem}
           </label>
         </div>
         <div class="row" style="margin-top:.75rem">
-          <label class="f" style="flex-direction:row;align-items:center;gap:.375rem">OpenAI 适配：解析 DSHT 情绪指令
+          <label class="f" style="min-width:22rem">OpenAI 适配默认行为（#[模式][参数] 内联可按请求覆盖）
+            <select id="def-mode">
+              <option value="text_emotion">文字情感：instructions 作为情感描述</option>
+              <option value="guide_audio">引导音频：voice=分组→默认音色，instructions 情绪→引导音频</option>
+              <option value="group_switch">切换音色：voice=分组，instructions 情绪→切组内音色（情感跟随）</option>
+            </select>
+          </label>
+          <label class="f" style="flex-direction:row;align-items:center;gap:.375rem">解析 DSHT 情绪指令
             <input type="checkbox" id="def-parse" style="width:auto">
           </label>
           <button class="btn btn-primary" style="margin-left:auto" onclick="saveDefaults()">保存默认参数</button>
@@ -800,11 +808,19 @@ function renderEmoRules() {
           <option value="none" ${r.action === "none" ? "selected" : ""}>仅联动（不改情感）</option>
           <option value="vector" ${r.action === "vector" ? "selected" : ""}>情感向量</option>
           <option value="text" ${r.action === "text" ? "selected" : ""}>文字情感</option>
+          <option value="audio" ${r.action === "audio" ? "selected" : ""}>引导音频（库引用）</option>
         </select>
       </label>
-      <label class="f" style="width:16rem" data-show="${i}">${r.action === "vector" ? "向量" : "情感描述"}
-        <input type="text" value="${esc(r.action === "vector" ? JSON.stringify(r.vector ?? []) : (r.text ?? ""))}" data-i="${i}" data-k="value">
-      </label>
+      ${r.action === "audio"
+        ? `<label class="f" style="width:20rem" title="库引用格式 root|rel；可先在参考音频库页搜索后复制">引导音频（库引用 root|rel）
+            <select data-i="${i}" data-k="audio">
+              <option value="">— 选择库音频 —</option>
+              ${refItems.map((it) => `<option value="${esc(libValue(it))}" ${libValue(it) === (r.audio ?? "") ? "selected" : ""}>${esc(libLabel(it))}</option>`).join("")}
+            </select>
+          </label>`
+        : `<label class="f" style="width:16rem" data-show="${i}">${r.action === "vector" ? "向量" : "情感描述"}
+            <input type="text" value="${esc(r.action === "vector" ? JSON.stringify(r.vector ?? []) : (r.text ?? ""))}" data-i="${i}" data-k="value">
+          </label>`}
       <label class="f" style="width:5rem">alpha
         <input type="number" step="0.05" min="0" max="1" value="${r.alpha ?? 1.0}" data-i="${i}" data-k="alpha">
       </label>
@@ -821,12 +837,13 @@ function renderEmoRules() {
         if (r.action === "vector") { try { r.vector = JSON.parse(inp.value); } catch { toast("向量不是合法 JSON", true); } }
         else r.text = inp.value;
       }
+      else if (k === "audio") r.audio = inp.value;
     };
   });
 }
 function addEmoRule() {
   emotions.rules ??= [];
-  emotions.rules.push({ phrases: [], tag: "", action: "none", vector: [1,0,0,0,0,0,0,0], text: "", alpha: 1.0 });
+  emotions.rules.push({ phrases: [], tag: "", action: "none", vector: [1,0,0,0,0,0,0,0], text: "", audio: "", alpha: 1.0 });
   renderEmoRules();
 }
 function delEmoRule(i) { emotions.rules.splice(i, 1); renderEmoRules(); }
@@ -925,6 +942,7 @@ async function loadApiPage() {
     $("def-fmt").value = s.response_format ?? "wav";
     $("def-alpha").value = s.emo_alpha ?? 1.0;
     $("def-parse").checked = s.parse_instruction !== false;
+    $("def-mode").value = s.adapter_mode ?? "text_emotion";
   } catch { toast("读取默认参数失败", true); }
   try {
     const cfg = await (await fetch("/api/config")).json();
@@ -940,7 +958,7 @@ async function saveDefaults() {
   const body = {
     lang: $("def-lang").value, speed: parseFloat($("def-speed").value) || 1.0,
     response_format: $("def-fmt").value, emo_alpha: parseFloat($("def-alpha").value) || 1.0,
-    parse_instruction: $("def-parse").checked,
+    parse_instruction: $("def-parse").checked, adapter_mode: $("def-mode").value,
   };
   await (await fetch("/api/settings", { method: "POST",
     headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
