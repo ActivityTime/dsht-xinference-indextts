@@ -251,6 +251,7 @@ ADAPTER_MODE_KEYWORDS = (
     ("text_emotion", ("文字情感", "text_emotion", "text-emotion")),
     ("guide_audio", ("引导音频", "guide_audio", "guide-audio")),
     ("group_switch", ("切换音色", "group_switch", "group-switch")),
+    ("vector", ("情绪向量", "vector", "emotion-vector")),
 )
 
 
@@ -323,7 +324,7 @@ async def api_tts_adapter(request: Request):
 
     # ── 1) 模式判定（提前：解析方式取决于模式；model 关键词可覆盖）──
     mode = _load_config("settings", {}).get("adapter_mode", "text_emotion")
-    if mode not in ("text_emotion", "guide_audio", "group_switch"):
+    if mode not in ("text_emotion", "guide_audio", "group_switch", "vector"):
         mode = "text_emotion"
     mode_source = "settings"
     model_lower = report["model"]["in"].lower()  # 原始 model 值（顶部已被改写为 MODEL_NAME）
@@ -503,6 +504,88 @@ async def api_tts_adapter(request: Request):
                 status_code=400)
         return await _proxy_tts(data, files, ref_info, adapter_report=report)
 
+    # ════ 分支 D：情绪向量（#48：切换音色行为 + 向量映射触发词命中→注入配置向量） ════
+    if mode == "vector":
+        group, group_consumed = _group_from(voice_parts)
+        if group is None and instructions:
+            g2, _ = _group_from([instructions])
+            group = g2
+        members = (group or {}).get("members", [])
+        default_member = next((mm for mm in members if mm.get("is_default")), None) or (members[0] if members else None)
+        # 标签解析与切换音色一致（子串；instructions 优先，voice 剩余段次之，成员序优先级）
+        tag = overrides.get("tag", "")
+        tagged_member = None
+        remaining = [seg for seg in voice_parts if seg not in group_consumed]
+        if members:
+            for mm in members:
+                label = str(mm.get("label", ""))
+                if label and instructions and label.lower() in instructions.lower():
+                    tagged_member = mm
+                    tag = label
+                    break
+            if tagged_member is None:
+                for mm in members:
+                    label = str(mm.get("label", ""))
+                    if label and any(label.lower() in seg.lower() for seg in remaining):
+                        tagged_member = mm
+                        tag = label
+                        break
+        report["tag"] = tag
+        report["instruction"] = instructions
+        search_text = (instructions + "，" + "，".join(remaining)).strip("，")
+        # 向量映射：触发词（子串）命中 → 注入配置向量（映射列表顺序，首条命中生效）
+        vec_hit = None
+        vec_word = ""
+        if search_text:
+            for rule in _load_config("vectormap", {"rules": []}).get("rules", []):
+                for tw in rule.get("triggers", []):
+                    if tw and tw in search_text:
+                        vec_hit = rule
+                        vec_word = tw
+                        break
+                if vec_hit is not None:
+                    break
+        hit = _match_emotion_rule(rules_for_adapter(), search_text) if search_text else None
+        # 音色与切换音色一致：标签命中成员（回退默认）
+        chosen = tagged_member or default_member
+        if chosen is not None and not explicit_ref:
+            path = _member_audio(chosen)
+            if path is not None:
+                files["prompt_speech"] = (path.name, path.read_bytes(), "application/octet-stream")
+                ref_info = {"source": "group", "rel": str(chosen.get("rel", "")), "name": voice, "sha256": _sha256_file(path)[:16]}
+                report["voice_resolved"] = f"{group.get('name', voice)} · {chosen.get('label', '')}" + ("（标签子串命中）" if tagged_member is not None else "（默认成员）")
+        # 情感：触发词命中 → 向量映射；否则与切换音色完全一致
+        if not explicit_emo:
+            if vec_hit is not None:
+                kwargs["emo_vector"] = vec_hit.get("vector") or [0, 0, 0, 0, 0, 0, 0, 0]
+                report["emotion"] = {"source": "vector_map", "trigger": vec_word, "vector": kwargs["emo_vector"]}
+            elif tagged_member is not None:
+                gp = _member_audio(tagged_member)
+                if gp is not None:
+                    kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
+                    report["emotion"] = {"source": "group_switch", "audio": gp.name, "label": tagged_member.get("label")}
+            elif hit is not None and hit.get("action") in ("vector", "text", "audio") and not any(k in kwargs for k in ("emo_vector", "use_emo_text", "emo_prompt_speech_b64")):
+                if hit["action"] == "vector":
+                    kwargs["emo_vector"] = hit.get("vector") or [0, 0, 0, 0, 0, 0, 0, 0]
+                elif hit["action"] == "text":
+                    kwargs["use_emo_text"] = True
+                    kwargs["emo_text"] = hit.get("text", "")
+                else:
+                    roots = _load_library()
+                    rr = str(hit.get("audio", "")).split("|", 1)
+                    if len(rr) == 2 and 0 <= int(rr[0] or 0) < len(roots):
+                        gp = Path(roots[int(rr[0])]["path"]) / rr[1]
+                        if gp.is_file():
+                            kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
+        data["input"] = (text.strip() or str(data.get("input") or "").strip())
+        report["residual"] = data["input"]
+        kwargs.setdefault("language", "ZH")
+        data["kwargs"] = json.dumps(kwargs, ensure_ascii=False)
+        if not files.get("prompt_speech"):
+            return JSONResponse(
+                {"detail": "OpenAI 适配：voice 未命中音色分组且未上传 prompt_speech，无法合成", "report": report},
+                status_code=400)
+        return await _proxy_tts(data, files, ref_info, adapter_report=report)
     # ════ 分支 C：切换音色（#47：解析与引导音频一致；prompt/emo 同取标签成员音频） ════
     group, group_consumed = _group_from(voice_parts)
     if group is None and instructions:
@@ -767,6 +850,7 @@ CONFIG_FILES = {
     "settings": CONSOLE_DIR / "settings.json",        # API 默认参数（API 配置页）
     "ttsform": CONSOLE_DIR / "tts_defaults.json",     # 语音合成页默认填写状态（直接配置专用）
     "adapterform": CONSOLE_DIR / "adapter_defaults.json",  # OpenAI 适配页默认填写状态
+    "vectormap": CONSOLE_DIR / "vector_map.json",          # 向量映射（触发词→情绪向量，情绪向量模式用）
     "emotions": CONSOLE_DIR / "emotion_map.json",     # 情绪映射规则（关键词→向量/文字/音频）
     "groups": CONSOLE_DIR / "voice_groups.json",      # 音色分组（同角色多情绪参考音频）
 }
@@ -806,7 +890,7 @@ async def api_settings_save(request: Request):
               "auto_emotion", "adapter_mode"):
         if k in body:
             value[k] = body[k]
-    if value.get("adapter_mode") not in ("text_emotion", "guide_audio", "group_switch", None, ""):
+    if value.get("adapter_mode") not in ("text_emotion", "guide_audio", "group_switch", "vector", None, ""):
         value["adapter_mode"] = "text_emotion"
     if "auto_emotion" in value:  # 保存时完成迁移
         value["parse_instruction"] = bool(value.pop("auto_emotion"))
@@ -889,6 +973,25 @@ async def api_emotions_save(request: Request):
         r["alpha"] = min(1.0, max(0.0, float(r.get("alpha", 1.0))))
     value = {"rules": rules}
     _save_config("emotions", value)
+    return value
+
+
+@app.get("/api/vectormap")
+def api_vectormap_get():
+    return _load_config("vectormap", {"rules": []})
+
+
+@app.post("/api/vectormap")
+async def api_vectormap_save(request: Request):
+    body = await request.json()
+    rules = body.get("rules", [])
+    for r in rules:
+        r["triggers"] = [t.strip() for t in r.get("triggers", []) if str(t).strip()]
+        if not isinstance(r.get("vector"), list) or len(r.get("vector", [])) != 8:
+            r["vector"] = [0, 0, 0, 0, 0, 0, 0, 0]
+        r["vector"] = [float(x) for x in r["vector"]]
+    value = {"rules": rules}
+    _save_config("vectormap", value)
     return value
 
 

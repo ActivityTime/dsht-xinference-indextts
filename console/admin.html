@@ -121,6 +121,7 @@ textarea{resize:vertical;min-height:6rem}
       <div class="nav-label">映射与配置</div>
       <a class="nav-item" data-page="emotions" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></svg><span>情绪映射</span></a>
       <a class="nav-item" data-page="groups" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>音色分组</span></a>
+      <a class="nav-item" data-page="vectormap" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m7 14 4-4 3 3 5-6"/></svg><span>向量映射</span></a>
       <a class="nav-item" data-page="api" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h10M4 12h16M4 17h7"/><circle cx="18" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg><span>API 配置</span></a>
       <div class="nav-label">记录</div>
       <a class="nav-item" data-page="history" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg><span>请求历史</span></a>
@@ -287,7 +288,7 @@ textarea{resize:vertical;min-height:6rem}
             <textarea id="ad-input" placeholder="大家好，欢迎体验……"></textarea>
           </label>
           <div class="grid2" style="margin-top:.75rem">
-            <label class="f" title="DSHT 兼容：模型名含 gpt-4o 才发情绪指令；适配层忽略此值统一路由本机模型。另支持模式关键词子串（覆盖默认行为）：文字情感 / 引导音频 / 切换音色（或 text_emotion / guide_audio / group_switch），如 gpt-4o-切换音色">
+            <label class="f" title="DSHT 兼容：模型名含 gpt-4o 才发情绪指令；适配层忽略此值统一路由本机模型。另支持模式关键词子串（覆盖默认行为）：文字情感 / 引导音频 / 切换音色 / 情绪向量（或 text_emotion / guide_audio / group_switch / vector），如 gpt-4o-切换音色">
               model（可携带模式关键词，如 gpt-4o-切换音色；适配层路由到本机模型）
               <input type="text" id="ad-model" value="IndexTTS-2.5">
             </label>
@@ -400,6 +401,20 @@ textarea{resize:vertical;min-height:6rem}
       </div>
     </section>
 
+    <!-- 向量映射页 -->
+    <section class="page" id="page-vectormap">
+      <h2 class="page-title">向量映射</h2>
+      <p class="page-sub">情绪向量模式的触发词表：配置触发词（逗号分隔）与 8 维情绪向量 [happy, angry, sad, afraid, disgusted, melancholic, surprised, calm]。请求文本（instructions + voice 剩余段）子串命中触发词 → 注入该向量；未命中则行为与切换音色完全一致。按列表顺序首条命中生效。存 console/vector_map.json。</p>
+      <div class="card">
+        <div class="row" style="margin-bottom:.75rem">
+          <button class="btn btn-secondary" onclick="loadVectorMap()">刷新</button>
+          <button class="btn btn-secondary" onclick="addVectorRule()">加一条映射</button>
+          <button class="btn btn-primary" style="margin-left:auto" onclick="saveVectorMap()">保存全部</button>
+        </div>
+        <div id="vec-rules">加载中…</div>
+      </div>
+    </section>
+
     <!-- API 配置页 -->
     <section class="page" id="page-api">
       <h2 class="page-title">API 配置</h2>
@@ -426,6 +441,7 @@ textarea{resize:vertical;min-height:6rem}
               <option value="text_emotion">文字情感：voice 定音色，instructions 定情感</option>
               <option value="guide_audio">引导音频：voice 定分组与默认音色，instructions 定引导音频</option>
               <option value="group_switch">切换音色：voice 定分组，instructions 情绪切组内音色</option>
+              <option value="vector">情绪向量：向量映射触发词命中→注入向量，否则同切换音色</option>
             </select>
           </label>
           <label class="f" style="flex-direction:row;align-items:center;gap:.375rem">解析 DSHT 情绪指令
@@ -493,6 +509,7 @@ document.querySelectorAll(".nav-item").forEach((el) => {
     if (el.dataset.page === "emotions") loadEmotions();
     if (el.dataset.page === "groups") loadGroups();
     if (el.dataset.page === "api") loadApiPage();
+    if (el.dataset.page === "vectormap") loadVectorMap();
   };
 });
 
@@ -943,6 +960,49 @@ async function saveGroups() {
   toast("音色分组已保存");
 }
 
+/* ── 向量映射页（情绪向量模式触发词表） ── */
+let vecMap = { rules: [] };
+async function loadVectorMap() {
+  try {
+    vecMap = await (await fetch("/api/vectormap")).json();
+    renderVectorRules();
+  } catch { toast("读取向量映射失败", true); }
+}
+function renderVectorRules() {
+  const box = $("vec-rules");
+  if (!(vecMap.rules ?? []).length) { box.innerHTML = '<div style="color:hsl(var(--muted-foreground));font-size:.75rem">暂无映射，点「加一条映射」。</div>'; return; }
+  box.innerHTML = vecMap.rules.map((r, i) =>
+    `<div class="ruleitem" style="flex-wrap:wrap;align-items:flex-end">
+      <label class="f" style="width:16rem">触发词（逗号分隔，子串命中）
+        <input type="text" value="${esc((r.triggers ?? []).join(","))}" data-i="${i}" data-k="triggers">
+      </label>
+      <label class="f" style="width:20rem">情绪向量 [happy, angry, sad, afraid, disgusted, melancholic, surprised, calm]
+        <input type="text" value="${esc(JSON.stringify(r.vector ?? []))}" data-i="${i}" data-k="vector">
+      </label>
+      <button class="btn btn-danger btn-sm" onclick="delVectorRule(${i})">删</button>
+    </div>`).join("");
+  box.querySelectorAll("input").forEach((inp) => {
+    inp.onchange = () => {
+      const i = +inp.dataset.i, k = inp.dataset.k, r = vecMap.rules[i];
+      if (k === "triggers") r.triggers = inp.value.split(/[,，]/).map((x) => x.trim()).filter(Boolean);
+      else if (k === "vector") { try { r.vector = JSON.parse(inp.value); } catch { toast("向量不是合法 JSON", true); } }
+    };
+  });
+}
+function addVectorRule() {
+  vecMap.rules ??= [];
+  vecMap.rules.push({ triggers: [], vector: [0, 0, 0, 0, 0, 0, 0, 0] });
+  renderVectorRules();
+}
+function delVectorRule(i) { vecMap.rules.splice(i, 1); renderVectorRules(); }
+async function saveVectorMap() {
+  const r = await (await fetch("/api/vectormap", { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify(vecMap) })).json();
+  vecMap = r;
+  renderVectorRules();
+  toast("向量映射已保存");
+}
+
 /* ── API 配置页 ── */
 async function loadApiPage() {
   try {
@@ -995,6 +1055,11 @@ const ADAPTER_MODE_DESCS = {
     + "标签命中的成员音频同时作为 prompt_speech 与 emo_prompt_speech_b64（两者保持一致，音色与情绪同源）；"
     + "未命中标签则都用默认成员、不注入（回退情绪映射规则）。"
     + "按请求覆盖：model 名含关键词 切换音色/group_switch。",
+  vector:
+    "行为与切换音色基本一致（分组/标签解析、prompt_speech 取标签命中成员完全相同）；"
+    + "差别：向量映射表（向量映射页配置）的触发词（子串命中 instructions + voice 剩余段，列表顺序首条生效）"
+    + "命中时注入配置的 8 维情绪向量（emo_vector），替代同源音频引导；"
+    + "未命中触发词则与切换音色完全一致。按请求覆盖：model 名含关键词 情绪向量/vector。",
 };
 function renderModeDesc() {
   const v = $("def-mode").value;
