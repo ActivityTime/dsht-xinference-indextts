@@ -272,15 +272,16 @@ async def api_tts_adapter(request: Request):
     优先级：内联 > 调用方显式 kwargs > 模式默认行为。
     """
     ctype = request.headers.get("content-type", "")
-    if "multipart/form-data" in ctype:
-        data, files, ref_info = await _read_form(request)
-    else:
+    if "application/json" in ctype:
         body = await request.json()
         data = {}
         for k, v in body.items():
             data[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
         files = {}
         ref_info = {"source": "json", "rel": None, "name": None, "sha256": None}
+    else:
+        # multipart（xinference 形态）与 urlencoded（curl -d / requests data=）都走表单解析
+        data, files, ref_info = await _read_form(request)
     report = {"residual": None, "tag": "", "instruction": "", "emotion": None,
               "voice_resolved": None, "stripped": [], "inline": {}, "mode": None,
               "model": {"in": str(data.get("model") or ""), "used": MODEL_NAME}}
