@@ -422,10 +422,10 @@ textarea{resize:vertical;min-height:6rem}
         </div>
         <div class="row" style="margin-top:.75rem">
           <label class="f" style="min-width:22rem">OpenAI 适配默认行为（#[模式][参数] 内联可按请求覆盖）
-            <select id="def-mode">
-              <option value="text_emotion">文字情感：instructions 作为情感描述</option>
-              <option value="guide_audio">引导音频：voice=分组→默认音色，instructions 情绪→引导音频</option>
-              <option value="group_switch">切换音色：voice=分组，instructions 情绪→切组内音色（情感跟随）</option>
+            <select id="def-mode" onchange="renderModeDesc()">
+              <option value="text_emotion">文字情感：voice 定音色，instructions 定情感</option>
+              <option value="guide_audio">引导音频：voice 定分组与默认音色，instructions 定引导音频</option>
+              <option value="group_switch">切换音色：voice 定分组，instructions 情绪切组内音色</option>
             </select>
           </label>
           <label class="f" style="flex-direction:row;align-items:center;gap:.375rem">解析 DSHT 情绪指令
@@ -433,6 +433,7 @@ textarea{resize:vertical;min-height:6rem}
           </label>
           <button class="btn btn-primary" style="margin-left:auto" onclick="saveDefaults()">保存默认参数</button>
         </div>
+        <div class="log" id="mode-desc" style="display:none"></div>
       </div>
       <div class="card">
         <h3>服务端点（只读，改端点请编辑 config.ps1）</h3>
@@ -952,6 +953,7 @@ async function loadApiPage() {
     $("def-alpha").value = s.emo_alpha ?? 1.0;
     $("def-parse").checked = s.parse_instruction !== false;
     $("def-mode").value = s.adapter_mode ?? "text_emotion";
+    renderModeDesc();
   } catch { toast("读取默认参数失败", true); }
   try {
     const cfg = await (await fetch("/api/config")).json();
