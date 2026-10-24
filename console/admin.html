@@ -972,7 +972,10 @@ function renderVectorRules() {
   const box = $("vec-rules");
   if (!(vecMap.rules ?? []).length) { box.innerHTML = '<div style="color:hsl(var(--muted-foreground));font-size:.75rem">暂无映射，点「加一条映射」。</div>'; return; }
   box.innerHTML = vecMap.rules.map((r, i) =>
-    `<div class="ruleitem" style="flex-wrap:wrap;align-items:flex-end">
+    `<div class="ruleitem" style="flex-wrap:wrap;align-items:flex-end;${r.enabled === false ? "opacity:.5" : ""}">
+      <label class="f" style="flex-direction:row;align-items:center;gap:.375rem;min-width:5rem" title="取消勾选即停用该映射（不参与命中），保存后生效">
+        <input type="checkbox" data-i="${i}" data-k="enabled" style="width:auto" ${r.enabled !== false ? "checked" : ""}> 启用
+      </label>
       <label class="f" style="width:16rem">触发词（逗号分隔，子串命中）
         <input type="text" value="${esc((r.triggers ?? []).join(","))}" data-i="${i}" data-k="triggers">
       </label>
@@ -984,14 +987,15 @@ function renderVectorRules() {
   box.querySelectorAll("input").forEach((inp) => {
     inp.onchange = () => {
       const i = +inp.dataset.i, k = inp.dataset.k, r = vecMap.rules[i];
-      if (k === "triggers") r.triggers = inp.value.split(/[,，]/).map((x) => x.trim()).filter(Boolean);
+      if (k === "enabled") { r.enabled = inp.checked; renderVectorRules(); }
+      else if (k === "triggers") r.triggers = inp.value.split(/[,，]/).map((x) => x.trim()).filter(Boolean);
       else if (k === "vector") { try { r.vector = JSON.parse(inp.value); } catch { toast("向量不是合法 JSON", true); } }
     };
   });
 }
 function addVectorRule() {
   vecMap.rules ??= [];
-  vecMap.rules.push({ triggers: [], vector: [0, 0, 0, 0, 0, 0, 0, 0] });
+  vecMap.rules.push({ triggers: [], vector: [0, 0, 0, 0, 0, 0, 0, 0], enabled: true });
   renderVectorRules();
 }
 function delVectorRule(i) { vecMap.rules.splice(i, 1); renderVectorRules(); }

@@ -538,6 +538,8 @@ async def api_tts_adapter(request: Request):
         vec_word = ""
         if search_text:
             for rule in _load_config("vectormap", {"rules": []}).get("rules", []):
+                if rule.get("enabled") is False:
+                    continue  # 已停用的映射不参与命中
                 for tw in rule.get("triggers", []):
                     if tw and tw in search_text:
                         vec_hit = rule
@@ -577,6 +579,7 @@ async def api_tts_adapter(request: Request):
                         gp = Path(roots[int(rr[0])]["path"]) / rr[1]
                         if gp.is_file():
                             kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
+                report["emotion"] = {"source": "mapping", "action": hit["action"]}
         data["input"] = (text.strip() or str(data.get("input") or "").strip())
         report["residual"] = data["input"]
         kwargs.setdefault("language", "ZH")
@@ -990,6 +993,7 @@ async def api_vectormap_save(request: Request):
         if not isinstance(r.get("vector"), list) or len(r.get("vector", [])) != 8:
             r["vector"] = [0, 0, 0, 0, 0, 0, 0, 0]
         r["vector"] = [float(x) for x in r["vector"]]
+        r["enabled"] = r.get("enabled") is not False  # 缺省启用，向后兼容旧数据
     value = {"rules": rules}
     _save_config("vectormap", value)
     return value
