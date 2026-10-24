@@ -991,8 +991,9 @@ const ADAPTER_MODE_DESCS = {
     + "未命中标签则都用默认、不注入（组内标签全未命中时回退情绪映射规则）。"
     + "按请求覆盖：model 名含关键词 引导音频/guide_audio。",
   group_switch:
-    "voice 定分组；instructions/voice 情绪标签命中组内成员 → 切换到该成员音色，"
-    + "情感跟随该成员参考音频（不注入）；组内无命中但映射规则有向量/文字动作时仍注入。"
+    "voice 与 instructions 取音色分组+情绪标签（解析与文字情感/引导音频完全一致：逗号中英分段、分组名整段消费、标签单向子串、instructions 优先、成员序优先级）——"
+    + "标签命中的成员音频同时作为 prompt_speech 与 emo_prompt_speech_b64（两者保持一致，音色与情绪同源）；"
+    + "未命中标签则都用默认成员、不注入（回退情绪映射规则）。"
     + "按请求覆盖：model 名含关键词 切换音色/group_switch。",
 };
 function renderModeDesc() {

@@ -503,69 +503,67 @@ async def api_tts_adapter(request: Request):
                 status_code=400)
         return await _proxy_tts(data, files, ref_info, adapter_report=report)
 
-    # ════ 分支 C：切换音色（#37 语义保持） ════
-    tag = overrides.get("tag", "")
-    if instructions:
-        m2 = DSH_INSTRUCTION_RE.match(instructions)
-        word = m2.group(1) if m2 else instructions
-        report["instruction"] = word
-        tag = tag or word
-        mi = DSH_INSTRUCTION_RE.match(text)
-        if mi and mi.group(1) == word:
-            text = text[mi.end():]
-            report["stripped"].append({"kind": "instruction-echo", "value": word})
-    group = None
-    for seg in voice_parts:
-        g = next((g for g in groups_all if g.get("name") == seg), None)
-        if g is not None:
-            group = g
-        else:
-            hit = _match_emotion_rule(rules_for_adapter(), seg)
-            if hit is not None and not tag:
-                tag = hit.get("tag") or seg
-                report["stripped"].append({"kind": "voice-emotion", "value": seg})
-    if overrides.get("voice_group"):
-        group = next((g for g in groups_all if g.get("name") == overrides["voice_group"]), None)
-    hit = _match_emotion_rule(rules_for_adapter(), text, prefer_tag=tag)
-    if hit is not None:
-        for p in sorted(hit.get("phrases", []), key=len, reverse=True):
-            if p and p in text:
-                text = text.replace(p, "")
-                report["stripped"].append({"kind": "phrase", "value": p})
-        if not tag:
-            tag = hit.get("tag") or tag
-            report["tag"] = tag
-    data["input"] = text.strip() or str(data.get("input") or "").strip()
-    report["residual"] = data["input"]
-
+    # ════ 分支 C：切换音色（#47：解析与引导音频一致；prompt/emo 同取标签成员音频） ════
+    group, group_consumed = _group_from(voice_parts)
+    if group is None and instructions:
+        g2, _ = _group_from([instructions])
+        group = g2
     members = (group or {}).get("members", [])
-    default_member = next((mm for mm in members if mm.get("is_default")), None) \
-        or (members[0] if members else None)
-    tagged_member = next((mm for mm in members
-                          if str(mm.get("label", "")).lower() == tag.lower()), None)
-
-    if not explicit_emo and hit is not None and hit.get("action") in ("vector", "text") \
-            and not any(k in kwargs for k in ("emo_vector", "use_emo_text")):
-        if hit["action"] == "vector":
-            kwargs["emo_vector"] = hit.get("vector") or [0, 0, 0, 0, 0, 0, 0, 0]
-        else:
-            kwargs["use_emo_text"] = True
-            kwargs["emo_text"] = hit.get("text", "")
-        kwargs.setdefault("emo_alpha", hit.get("alpha", 1.0))
-        report["emotion"] = {"source": "mapping", "action": hit["action"]}
-
-    if not explicit_ref:
-        chosen = tagged_member if tagged_member is not None else default_member
-        if chosen is not None:
-            path = _member_audio(chosen)
-            if path is not None:
-                files["prompt_speech"] = (path.name, path.read_bytes(), "application/octet-stream")
-                ref_info = {"source": "group", "rel": str(chosen.get("rel", "")),
-                            "name": voice, "sha256": _sha256_file(path)[:16]}
-                report["voice_resolved"] = f"{group.get('name', voice)} · {chosen.get('label', '')}"
+    default_member = next((mm for mm in members if mm.get("is_default")), None)         or (members[0] if members else None)
+    # 情绪标签：子串匹配（与文字情感/引导音频一致）——instructions 优先，voice 剩余段次之
+    tag = overrides.get("tag", "")
+    tagged_member = None
+    remaining = [seg for seg in voice_parts if seg not in group_consumed]
+    if members:
+        for mm in members:  # ① instructions 优先
+            label = str(mm.get("label", ""))
+            if label and instructions and label.lower() in instructions.lower():
+                tagged_member = mm
+                tag = label
+                break
+        if tagged_member is None:  # ② voice 剩余段
+            for mm in members:
+                label = str(mm.get("label", ""))
+                if label and any(label.lower() in seg.lower() for seg in remaining):
+                    tagged_member = mm
+                    tag = label
+                    break
+    report["tag"] = tag
+    report["instruction"] = instructions
+    search_text = (instructions + "，" + "，".join(remaining)).strip("，")
+    hit = _match_emotion_rule(rules_for_adapter(), search_text) if search_text else None
+    # 音色 = 标签命中成员（未命中用默认）；emo 引导与 prompt 同一音频（保持一致）
+    chosen = tagged_member or default_member
+    if chosen is not None and not explicit_ref:
+        path = _member_audio(chosen)
+        if path is not None:
+            files["prompt_speech"] = (path.name, path.read_bytes(), "application/octet-stream")
+            ref_info = {"source": "group", "rel": str(chosen.get("rel", "")),
+                        "name": voice, "sha256": _sha256_file(path)[:16]}
+            report["voice_resolved"] = f"{group.get('name', voice)} · {chosen.get('label', '')}"                 + ("（标签子串命中）" if tagged_member is not None else "（默认成员）")
+            if not explicit_emo and tagged_member is not None:
+                kwargs["emo_prompt_speech_b64"] = base64.b64encode(path.read_bytes()).decode("ascii")
+                report["emotion"] = {"source": "group_switch", "audio": path.name,
+                                     "label": tagged_member.get("label")}
+    # 未命中标签 → 回退情绪映射规则（与引导音频一致）
+    if not explicit_emo and tagged_member is None             and not any(k in kwargs for k in ("emo_vector", "use_emo_text", "emo_prompt_speech_b64")):
+        if hit is not None and hit.get("action") in ("vector", "text", "audio"):
+            if hit["action"] == "vector":
+                kwargs["emo_vector"] = hit.get("vector") or [0, 0, 0, 0, 0, 0, 0, 0]
+            elif hit["action"] == "text":
+                kwargs["use_emo_text"] = True
+                kwargs["emo_text"] = hit.get("text", "")
+            else:
+                roots = _load_library()
+                rr = str(hit.get("audio", "")).split("|", 1)
+                if len(rr) == 2 and 0 <= int(rr[0] or 0) < len(roots):
+                    gp = Path(roots[int(rr[0])]["path"]) / rr[1]
+                    if gp.is_file():
+                        kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
+    data["input"] = (text.strip() or str(data.get("input") or "").strip())
+    report["residual"] = data["input"]
     kwargs.setdefault("language", "ZH")
     data["kwargs"] = json.dumps(kwargs, ensure_ascii=False)
-
     if not files.get("prompt_speech"):
         return JSONResponse(
             {"detail": "OpenAI 适配：voice 未命中音色分组且未上传 prompt_speech，无法合成", "report": report},
