@@ -64,7 +64,9 @@ app = FastAPI(title="IndexTTS-2.5 Console", docs_url=None, redoc_url=None, opena
 
 @app.get("/")
 def index():
-    return FileResponse(ADMIN_HTML, media_type="text/html; charset=utf-8")
+    # no-cache：页面随代码更新，浏览器必须每次校验（否则改版后一直看旧缓存）
+    return FileResponse(ADMIN_HTML, media_type="text/html; charset=utf-8",
+                        headers={"cache-control": "no-cache"})
 
 
 @app.get("/api/config")
