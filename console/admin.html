@@ -282,7 +282,8 @@ textarea{resize:vertical;min-height:6rem}
           <label class="f">instructions（OpenAI 标准字段：情绪指令「用X的语气说这句话。」或裸短语「温柔地」；适配层剥壳查映射）
             <input type="text" id="ad-instructions" placeholder="可选，如：用开心的语气说这句话。">
           </label>
-          <label class="f" style="margin-top:.75rem">input（纯正文，不含情绪指令）
+          <label class="f" style="margin-top:.75rem" title="正文中可用 #[文字情感][描述] / #[情感向量][1,0,...] / #[引导音频][root|rel] / #[音色分组][名] / #[情绪标签][标签] 内联覆盖默认行为（发送前自动剔除）">
+            input（纯正文；支持 #[模式][参数] 内联覆盖）
             <textarea id="ad-input" placeholder="大家好，欢迎体验……"></textarea>
           </label>
           <div class="grid2" style="margin-top:.75rem">

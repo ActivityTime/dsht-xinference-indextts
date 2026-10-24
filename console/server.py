@@ -14,6 +14,7 @@ IndexTTS-2.5 独立 Web 控制台后端（127.0.0.1:9998，自包含于 console/
 
 单机内网用途：只绑 127.0.0.1；文件接口做路径穿越防护；端口占用即退出（单实例）。
 """
+import base64
 import hashlib
 import json
 import logging
@@ -249,9 +250,28 @@ DSH_INSTRUCTION_RE = re.compile(
 
 @app.post("/api/tts/adapter")
 async def api_tts_adapter(request: Request):
+    """OpenAI 适配层（对齐 K:\\OmniVoice 适配语义并扩展）。
+
+    请求字段：model(忽略,路由本机模型) / input(纯正文) / instructions(情绪指令,
+    OpenAI 标准字段) / voice(default、音色分组名，或逗号组合「分组名,情绪词」) /
+    response_format / speed / kwargs(xinference 扩展 JSON) / prompt_speech 文件。
+
+    默认行为 settings.adapter_mode（API 配置页可配，#[模式][参数] 内联可覆盖）：
+      - text_emotion  instructions 作为文字情感描述（emo_text）
+      - guide_audio   voice 决定分组→默认音色；instructions 情绪 → 引导音频
+                      （组内标签成员音频 → 映射规则 audio 引用 → 向量/文字 回退）
+      - group_switch  voice 决定分组；instructions 情绪 → 切组内音色；情感=无
+
+    内联覆盖：instructions/voice/input 任意字段中 #[模式][参数]，解析后从文本剔除。
+      模式 ∈ {文字情感, 情感向量, 引导音频, 音色分组, 情绪标签}。未识别的标记原样保留。
+    匹配顺序：内联 > 调用方显式 kwargs > 默认模式/情绪映射表。
+    """
     data, files, ref_info = await _read_form(request)
     report = {"residual": None, "tag": "", "instruction": "", "emotion": None,
-              "voice_resolved": None, "stripped": []}
+              "voice_resolved": None, "stripped": [], "inline": {}, "mode": None,
+              "model": {"in": str(data.get("model") or ""), "used": MODEL_NAME}}
+    data["model"] = MODEL_NAME
+    voice = str(data.get("voice") or "").strip()
     try:
         kwargs = json.loads(data.get("kwargs") or "{}")
         if not isinstance(kwargs, dict):
@@ -259,98 +279,195 @@ async def api_tts_adapter(request: Request):
     except json.JSONDecodeError:
         kwargs = {}
 
+    # ── 0) 内联 #[模式][参数] 覆盖（三字段全扫，命中即从原文本剔除）──
+    INLINE_RE = re.compile(r"#\[([^\[^\]]{1,20})\]\[([^\[^\]]{1,400})\]")
+    overrides = {}
+    for fname in ("instructions", "voice", "input"):
+        t = str(data.get(fname) or "")
+        if not t:
+            continue
+
+        def _sub(m, fname=fname):
+            mode, param = m.group(1).strip(), m.group(2).strip()
+            key = {"文字情感": "emo_text", "情感向量": "emo_vector", "引导音频": "emo_ref",
+                   "音色分组": "voice_group", "情绪标签": "tag"}.get(mode)
+            if key is None:
+                return m.group(0)  # 未识别 → 原样保留
+            overrides[key] = param
+            report["inline"][f"{fname}:{mode}"] = param
+            return ""
+
+        data[fname] = INLINE_RE.sub(_sub, t).strip()
+
+    # ── 1) voice 逗号组合解析：段命中分组名 → 分组；命中映射短语 → 情绪词 ──
+    emap = api_emotions_get()
+    rules = emap.get("rules", [])
+    voice_parts = [seg.strip() for seg in re.split(r"[，,]", str(data.get("voice") or ""))
+                   if seg.strip() and seg.strip() != "default"]
+    group = None
+    for seg in voice_parts:
+        if group is None:
+            group = next((g for g in _load_config("groups", {"groups": []}).get("groups", [])
+                          if g.get("name") == seg), None)
+        if group is None or not _voice_seg_is_group(seg):
+            hit = _match_emotion_rule(rules, seg)
+            if hit is not None and not overrides.get("tag"):
+                overrides.setdefault("tag", hit.get("tag") or seg)
+                report["stripped"].append({"kind": "voice-emotion", "value": seg})
+    if overrides.get("voice_group"):
+        group = next((g for g in _load_config("groups", {"groups": []}).get("groups", [])
+                      if g.get("name") == overrides["voice_group"]), None)
+
+    # ── 2) instructions 剥壳取情绪词（指令句或裸短语）──
     text = str(data.get("input") or "")
-    # ⓪ model 别名改写：DSHT 只有在模型名含 gpt-4o 时才发情绪指令，而 Xinference 的
-    #    model 必须是注册名（IndexTTS-2.5）——适配层忽略调用方的 model 值，统一路由本机模型。
-    model_in = str(data.get("model") or "")
-    data["model"] = MODEL_NAME
-    report["model"] = {"in": model_in, "used": MODEL_NAME}
-    # ① 情绪指令：OpenAI 标准字段 instructions（DSHT 把「用X的语气说这句话。」放这里，
-    #    也接受裸情绪短语如「温柔地」）；兼容回退：指令句直接写在 input 开头的老形态。
     instructions = str(data.pop("instructions", "") or "").strip()
+    tag = overrides.get("tag", "")
     if instructions:
         m2 = DSH_INSTRUCTION_RE.match(instructions)
-        tag = m2.group(1) if m2 else instructions
-        report["instruction"] = tag
+        word = m2.group(1) if m2 else instructions
+        report["instruction"] = word
+        tag = tag or word
         mi = DSH_INSTRUCTION_RE.match(text)
-        if mi and mi.group(1) == tag:
-            text = text[mi.end():]
-            report["stripped"].append({"kind": "instruction-echo", "value": tag})
-    else:
-        m = DSH_INSTRUCTION_RE.match(text)
-        if m:
-            tag = m.group(1)
-            text = text[m.end():]
-            instructions = tag
-            report["instruction"] = tag
-            report["stripped"].append({"kind": "instruction", "value": tag})
+        if mi and mi.group(1) == word:
+            text = text[mi.end():]  # 兼容：指令句同时写在 input 开头的老形态
     report["tag"] = tag
 
-    # ② 情绪映射表：短语最长匹配（对正文残余）+ 指令词/联动标签对齐
-    emap = api_emotions_get()
-    rules = sorted(emap.get("rules", []),
-                   key=lambda r: max([len(p) for p in r.get("phrases", [])] or [0]), reverse=True)
-    hit = None
-    for r in rules:
-        phrases = sorted(r.get("phrases", []), key=len, reverse=True)
-        for p in phrases:
-            if p and p in text:
-                hit = r
-                break
-        if hit is None and tag and (r.get("tag") or "").lower() == tag.lower():
-            hit = r
-        if hit is not None:
-            break
+    # ── 3) 情绪映射短语最长匹配（对正文），命中短语从合成文本剥离 ──
+    hit = _match_emotion_rule(rules, text, prefer_tag=tag)
     if hit is not None:
-        if not tag:
-            tag = hit.get("tag") or tag
-            report["tag"] = tag
-        for p in hit.get("phrases", []):
+        for p in sorted(hit.get("phrases", []), key=len, reverse=True):
             if p and p in text:
                 text = text.replace(p, "")
                 report["stripped"].append({"kind": "phrase", "value": p})
+        if not tag:
+            tag = hit.get("tag") or tag
+            report["tag"] = tag
+    data["input"] = text.strip() or str(data.get("input") or "").strip()
+    report["residual"] = data["input"]
 
-    # ③ 情感动作注入（调用方 kwargs 显式 emo_* 优先）
-    if hit is not None and hit.get("action") in ("vector", "text") \
-            and not any(k in kwargs for k in ("emo_vector", "use_emo_text", "emo_prompt_speech_b64")):
+    # ── 4) 分组与成员解析（voice 分组 / 覆盖分组）──
+    members = (group or {}).get("members", [])
+    default_member = next((mm for mm in members if mm.get("is_default")), None) \
+        or (members[0] if members else None)
+    tagged_member = next((mm for mm in members
+                          if str(mm.get("label", "")).lower() == tag.lower()), None)
+
+    # ── 5) 情感与音色（优先级：内联 > 显式 kwargs > 默认模式/映射）──
+    explicit_emo = any(k in kwargs for k in ("emo_vector", "use_emo_text", "emo_prompt_speech_b64"))
+    explicit_ref = bool(files.get("prompt_speech"))
+    mode = overrides.get("adapter_mode") or _load_config("settings", {}).get(
+        "adapter_mode", "text_emotion")
+    if mode not in ("text_emotion", "guide_audio", "group_switch"):
+        mode = "text_emotion"
+    report["mode"] = mode
+
+    def _member_audio(mm):
+        roots = _load_library()
+        ri = int(mm.get("root", 0))
+        if 0 <= ri < len(roots):
+            path = Path(roots[ri]["path"]) / str(mm.get("rel", ""))
+            if path.is_file():
+                return path
+        return None
+
+    if explicit_emo:
+        report["emotion"] = {"source": "explicit kwargs"}
+    elif overrides.get("emo_vector"):
+        try:
+            kwargs["emo_vector"] = [float(x) for x in re.split(r"[，,]", overrides["emo_vector"]) if x.strip()]
+            kwargs.setdefault("emo_alpha", 1.0)
+            report["emotion"] = {"source": "inline", "action": "vector"}
+        except ValueError:
+            pass
+    elif overrides.get("emo_text"):
+        kwargs["use_emo_text"] = True
+        kwargs["emo_text"] = overrides["emo_text"]
+        kwargs.setdefault("emo_alpha", 1.0)
+        report["emotion"] = {"source": "inline", "action": "text"}
+
+    # 音色：分组场景按模式取成员（模式②情绪切音色；其余默认成员）
+    if not explicit_ref:
+        chosen = tagged_member if (mode == "group_switch" and tagged_member is not None) else default_member
+        if chosen is not None:
+            path = _member_audio(chosen)
+            if path is not None:
+                files["prompt_speech"] = (path.name, path.read_bytes(), "application/octet-stream")
+                ref_info = {"source": "group", "rel": str(chosen.get("rel", "")),
+                            "name": voice, "sha256": _sha256_file(path)[:16]}
+                report["voice_resolved"] = f"{group.get('name', voice)} · {chosen.get('label', '')}"
+
+    # 引导音频（模式 guide_audio；内联引用 > 组内标签成员音频 > 映射规则 audio 引用）
+    if not explicit_emo and mode == "guide_audio":
+        guide_path = None
+        if overrides.get("emo_ref"):
+            roots = _load_library()
+            rr = str(overrides["emo_ref"]).split("|", 1)
+            if len(rr) == 2 and 0 <= int(rr[0] or 0) < len(roots):
+                gp = Path(roots[int(rr[0])]["path"]) / rr[1]
+                guide_path = gp if gp.is_file() else None
+        elif tagged_member is not None:
+            guide_path = _member_audio(tagged_member)
+        elif hit is not None and hit.get("action") == "audio":
+            roots = _load_library()
+            rr = str(hit.get("audio", "")).split("|", 1)
+            if len(rr) == 2 and 0 <= int(rr[0] or 0) < len(roots):
+                gp = Path(roots[int(rr[0])]["path"]) / rr[1]
+                guide_path = gp if gp.is_file() else None
+        if guide_path is not None:
+            kwargs["emo_prompt_speech_b64"] = base64.b64encode(guide_path.read_bytes()).decode("ascii")
+            report["emotion"] = {"source": "guide_audio", "audio": guide_path.name}
+        elif hit is not None and hit.get("action") in ("vector", "text") \
+                and not any(k in kwargs for k in ("emo_vector", "use_emo_text")):
+            if hit["action"] == "vector":
+                kwargs["emo_vector"] = hit.get("vector") or [0, 0, 0, 0, 0, 0, 0, 0]
+            else:
+                kwargs["use_emo_text"] = True
+                kwargs["emo_text"] = hit.get("text", "")
+            kwargs.setdefault("emo_alpha", hit.get("alpha", 1.0))
+            report["emotion"] = {"source": "mapping", "action": hit["action"]}
+    elif not explicit_emo and mode == "text_emotion" and instructions \
+            and not any(k in kwargs for k in ("emo_vector", "use_emo_text")):
+        # 模式③：instructions 作为文字情感描述（整段直用）
+        kwargs["use_emo_text"] = True
+        kwargs["emo_text"] = instructions
+        kwargs.setdefault("emo_alpha", 1.0)
+        report["emotion"] = {"source": "instructions", "action": "text"}
+    elif not explicit_emo and mode == "group_switch" and hit is not None \
+            and hit.get("action") in ("vector", "text") \
+            and tagged_member is None \
+            and not any(k in kwargs for k in ("emo_vector", "use_emo_text")):
+        # 模式②回退：组内无标签成员时，映射动作仍可注入情感
         if hit["action"] == "vector":
             kwargs["emo_vector"] = hit.get("vector") or [0, 0, 0, 0, 0, 0, 0, 0]
         else:
             kwargs["use_emo_text"] = True
             kwargs["emo_text"] = hit.get("text", "")
         kwargs.setdefault("emo_alpha", hit.get("alpha", 1.0))
-        report["emotion"] = {"tag": tag, "action": hit["action"]}
+        report["emotion"] = {"source": "mapping", "action": hit["action"]}
 
-    data["input"] = text.strip() or data.get("input", "")
-    report["residual"] = data["input"]
     kwargs.setdefault("language", "ZH")
     data["kwargs"] = json.dumps(kwargs, ensure_ascii=False)
 
-    # voice 解析：分组名 → 情绪标签联动成员（回退默认）；给了 prompt_speech 则 voice 不参与
-    voice = str(data.get("voice") or "").strip()
-    if not files.get("prompt_speech") and voice and voice != "default":
-        group = next((g for g in _load_config("groups", {"groups": []}).get("groups", [])
-                      if g.get("name") == voice), None)
-        members = (group or {}).get("members", [])
-        member = next((mm for mm in members
-                       if str(mm.get("label", "")).lower() == tag.lower()), None) \
-            or next((mm for mm in members if mm.get("is_default")), None) \
-            or (members[0] if members else None)
-        if member is not None:
-            roots = _load_library()
-            ri = int(member.get("root", 0))
-            if 0 <= ri < len(roots):
-                path = Path(roots[ri]["path"]) / str(member.get("rel", ""))
-                if path.is_file():
-                    files["prompt_speech"] = (path.name, path.read_bytes(), "application/octet-stream")
-                    ref_info = {"source": "group", "rel": str(member.get("rel", "")),
-                                "name": voice, "sha256": _sha256_file(path)[:16]}
-                    report["voice_resolved"] = f"{voice} · {member.get('label', '')}"
     if not files.get("prompt_speech"):
         return JSONResponse(
             {"detail": "OpenAI 适配：voice 未命中音色分组且未上传 prompt_speech，无法合成", "report": report},
             status_code=400)
     return await _proxy_tts(data, files, ref_info, adapter_report=report)
+
+
+def _voice_seg_is_group(seg: str) -> bool:
+    return any(g.get("name") == seg for g in _load_config("groups", {"groups": []}).get("groups", []))
+
+
+def _match_emotion_rule(rules, text: str, prefer_tag: str = ""):
+    """短语最长匹配（对正文）+ 联动标签/情绪词对齐；返回第一条命中规则或 None。"""
+    for r in sorted(rules, key=lambda r: max([len(p) for p in r.get("phrases", [])] or [0]), reverse=True):
+        for p in sorted(r.get("phrases", []), key=len, reverse=True):
+            if p and (p in text or (prefer_tag and p == prefer_tag)):
+                return r
+        if prefer_tag and (r.get("tag") or "").lower() == prefer_tag.lower():
+            return r
+    return None
 
 
 def _prune_history():
@@ -559,7 +676,7 @@ def _save_config(name: str, value):
 def api_settings_get():
     value = _load_config("settings", {
         "lang": "ZH", "speed": 1.0, "response_format": "wav", "emo_alpha": 1.0,
-        "parse_instruction": True,
+        "parse_instruction": True, "adapter_mode": "text_emotion",
     })
     # 迁移：v1 的 auto_emotion（关键词自动匹配，已废弃）→ parse_instruction（DSHT 情绪指令解析）
     if "parse_instruction" not in value and "auto_emotion" in value:
@@ -571,9 +688,12 @@ def api_settings_get():
 async def api_settings_save(request: Request):
     body = await request.json()
     value = _load_config("settings", {})
-    for k in ("lang", "speed", "response_format", "emo_alpha", "parse_instruction", "auto_emotion"):
+    for k in ("lang", "speed", "response_format", "emo_alpha", "parse_instruction",
+              "auto_emotion", "adapter_mode"):
         if k in body:
             value[k] = body[k]
+    if value.get("adapter_mode") not in ("text_emotion", "guide_audio", "group_switch", None, ""):
+        value["adapter_mode"] = "text_emotion"
     if "auto_emotion" in value:  # 保存时完成迁移
         value["parse_instruction"] = bool(value.pop("auto_emotion"))
     _save_config("settings", value)
@@ -645,8 +765,9 @@ async def api_emotions_save(request: Request):
     for r in rules:
         r["phrases"] = [p.strip() for p in r.get("phrases", []) if str(p).strip()]
         r["tag"] = str(r.get("tag", "")).strip()
-        if r.get("action") not in ("none", "vector", "text"):
+        if r.get("action") not in ("none", "vector", "text", "audio"):
             r["action"] = "none"
+        r["audio"] = str(r.get("audio", "")).strip()  # 引导音频引用 "root|rel"（参考音频库）
         if r["action"] == "vector" and not isinstance(r.get("vector"), list):
             r["vector"] = [0, 0, 0, 0, 0, 0, 0, 0]
         if r["action"] == "text":
