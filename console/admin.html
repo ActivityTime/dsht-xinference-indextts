@@ -271,12 +271,12 @@ textarea{resize:vertical;min-height:6rem}
           <select id="tts-fmt" style="width:6rem"><option value="wav">wav</option><option value="mp3">mp3</option></select>
           <span id="tts-meta" style="font-size:.75rem;color:hsl(var(--muted-foreground))"></span>
           <span class="pill" id="pill-cache" style="display:none"><span class="dot"></span><span id="cache-text"></span></span>
+          <button class="btn btn-secondary" style="margin-left:auto" onclick="saveAsDefault()" title="把本页全部选项的当前状态存为默认填写（刷新自动套用）">存为合成页默认填写</button>
         </div>
         <div id="tts-result" style="display:none;margin-top:.75rem">
           <audio class="audio-out" id="tts-audio" controls></audio>
           <div class="row" style="margin-top:.5rem">
             <a class="btn btn-secondary" id="tts-dl" download>下载</a>
-            <button class="btn btn-secondary" onclick="saveAsDefault()">存为合成页默认填写</button>
           </div>
         </div>
         <div class="log" id="tts-log" style="margin-top:.75rem;display:none"></div>
@@ -832,27 +832,62 @@ async function saveDefaults() {
     headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
   toast("API 默认参数已保存");
 }
-/* ── 语音合成页默认填写状态（独立于 API 配置页的默认参数） ── */
-async function applyDefaultsToForm() {
-  try {
-    const s = await (await fetch("/api/ttsform")).json();
-    $("tts-lang").value = s.lang ?? "ZH";
-    $("tts-speed").value = s.speed ?? 1.0;
-    $("tts-fmt").value = s.response_format ?? "wav";
-    $("emo-alpha").value = s.emo_alpha ?? 1.0;
-    $("emo-auto").checked = s.auto_emotion !== false;
-    $("emo-mode").value = s.emo_mode ?? "none"; renderEmoMode();
-  } catch { /* 首次无配置用页面默认 */ }
-}
-async function saveAsDefault() {
-  const body = {
+/* ── 语音合成页默认填写状态（独立于 API 配置页的默认参数；含整页全部选项与输入） ── */
+function collectTtsForm() {
+  return {
+    input: $("tts-text").value,
     lang: $("tts-lang").value, speed: parseFloat($("tts-speed").value) || 1.0,
     response_format: $("tts-fmt").value, emo_alpha: parseFloat($("emo-alpha").value) || 1.0,
     auto_emotion: $("emo-auto").checked, emo_mode: $("emo-mode").value,
+    ref_mode: $("ref-mode").value, ref_lib: $("tts-ref").value,
+    ref_group: $("tts-group").value, ref_group_member: $("tts-group-member").value,
+    emo_audio_lib: $("emo-audio-lib").value, emo_rule: ($("emo-rule").selectedOptions[0] ?? {}).textContent ?? "",
   };
+}
+async function applyDefaultsToForm() {
+  let s;
+  try { s = await (await fetch("/api/ttsform")).json(); } catch { return; }
+  if (s.input !== undefined) $("tts-text").value = s.input;
+  $("tts-lang").value = s.lang ?? "ZH";
+  $("tts-speed").value = s.speed ?? 1.0;
+  $("tts-fmt").value = s.response_format ?? "wav";
+  $("emo-alpha").value = s.emo_alpha ?? 1.0;
+  $("emo-auto").checked = s.auto_emotion !== false;
+  // 音色来源（含选项缺失时手动注入：搜索过滤/400 条上限都可能截掉已存项）
+  $("ref-mode").value = s.ref_mode ?? "lib"; renderRefMode();
+  const ensureOption = (selId, value) => {
+    if (!value) return;
+    const sel = $(selId);
+    if (![...sel.options].some((o) => o.value === value)) {
+      const it = refItems.find((x) => libValue(x) === value);
+      sel.insertAdjacentHTML("afterbegin",
+        `<option value="${esc(value)}">${esc(it ? libLabel(it) : value)}</option>`);
+    }
+    sel.value = value;
+  };
+  ensureOption("tts-ref", s.ref_lib);
+  if (s.ref_group) {
+    $("tts-group").value = s.ref_group;
+    renderGroupMembers();
+    ensureOption("tts-group-member", s.ref_group_member);
+  }
+  // 情感模式与音频引导
+  $("emo-mode").value = s.emo_mode ?? "none"; renderEmoMode();
+  if (s.emo_audio_lib) {
+    fillPicker("emo-audio-lib", $("emo-audio-filter").value);
+    ensureOption("emo-audio-lib", s.emo_audio_lib);
+  }
+  // 情绪映射规则（按规则名回选）
+  if (s.emo_rule) {
+    const opt = [...$("emo-rule").options].find((o) => o.textContent.startsWith(s.emo_rule));
+    if (opt) $("emo-rule").value = opt.value;
+  }
+}
+async function saveAsDefault() {
+  const body = collectTtsForm();
   await (await fetch("/api/ttsform", { method: "POST",
     headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
-  toast("已存为合成页默认填写（刷新后自动套用；API 配置页的默认参数不受影响）");
+  toast("已存为合成页默认填写（整页选项+输入；刷新后自动套用）");
 }
 
 /* ── 请求历史 ── */
@@ -989,10 +1024,10 @@ async function doTts() {
 async function init() {
   await loadRefLib();
   loadLibrary();
-  loadEmotions();
-  loadGroups();
+  await loadEmotions();
+  await loadGroups();
   refreshAll();
-  applyDefaultsToForm();
+  await applyDefaultsToForm();
   setInterval(refreshAll, 15000);
 }
 init();

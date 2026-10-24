@@ -447,7 +447,9 @@ def api_ttsform_get():
 async def api_ttsform_save(request: Request):
     body = await request.json()
     value = _load_config("ttsform", {})
-    for k in ("lang", "speed", "response_format", "emo_alpha", "auto_emotion", "emo_mode"):
+    for k in ("lang", "speed", "response_format", "emo_alpha", "auto_emotion", "emo_mode",
+              "input", "ref_mode", "ref_lib", "ref_group", "ref_group_member",
+              "emo_audio_lib", "emo_rule"):
         if k in body:
             value[k] = body[k]
     if value.get("emo_mode") not in ("none", "vector", "text", "audio"):
