@@ -221,7 +221,8 @@ textarea{resize:vertical;min-height:6rem}
         <div class="row">
           <label class="f" style="min-width:13rem">模式
             <select id="emo-mode" onchange="renderEmoMode()">
-              <option value="none" selected>无（跟随参考音频情绪）</option>
+              <option value="none" selected>无（不干预，跟随参考音频情绪）</option>
+              <option value="auto">自动（按关键词映射，需开启自动开关）</option>
               <option value="vector">情感向量（8 维手动）</option>
               <option value="text">文字情感描述（Qwen）</option>
               <option value="audio">音频引导（情感参考音频）</option>
@@ -925,22 +926,6 @@ async function doTts() {
   const btn = $("tts-go");
   const text = $("tts-text").value.trim();
   if (!text) { toast("请输入文本", true); return; }
-  // 自动情绪映射：未手动选模式且开关开 → 按关键词匹配
-  let autoApplied = null;
-  if ($("emo-auto").checked && $("emo-mode").value === "none") {
-    const rule = matchEmotionRule(text);
-    if (rule) {
-      if (rule.action === "vector") {
-        $("emo-mode").value = "vector"; renderEmoMode();
-        $("emo-vector").value = JSON.stringify(rule.vector ?? []);
-      } else {
-        $("emo-mode").value = "text"; renderEmoMode();
-        $("emo-text").value = rule.text ?? "";
-      }
-      if (rule.alpha !== undefined) $("emo-alpha").value = rule.alpha;
-      autoApplied = rule.name;
-    }
-  }
   // 音色来源解析
   const refMode = $("ref-mode").value;
   let refValue = currentRefValue();
@@ -950,9 +935,26 @@ async function doTts() {
     toast(refMode === "group" ? "请选择分组与成员" : "请选择参考音频", true);
     return;
   }
+  // 自动情绪映射：仅当选中「自动」模式（「无」= 明确不干预，绝不被覆盖）
   const kwargs = { language: $("tts-lang").value };
-  const alpha = parseFloat($("emo-alpha").value);
-  if (Number.isFinite(alpha) && alpha !== 1.0) kwargs.emo_alpha = alpha;
+  let autoApplied = null;
+  if ($("emo-auto").checked && $("emo-mode").value === "auto") {
+    const rule = matchEmotionRule(text);
+    if (rule) {
+      autoApplied = rule.name;
+      if (rule.action === "vector") {
+        kwargs.emo_vector = rule.vector ?? [0,0,0,0,0,0,0,0];
+      } else {
+        kwargs.use_emo_text = true;
+        kwargs.emo_text = rule.text ?? text;
+      }
+      if (rule.alpha !== undefined) {
+        kwargs.emo_alpha = rule.alpha;
+      }
+    }
+  }
+  const emoAlpha = parseFloat($("emo-alpha").value);
+  if (Number.isFinite(emoAlpha) && autoApplied === null && emoAlpha !== 1.0) kwargs.emo_alpha = emoAlpha;
   const mode = $("emo-mode").value;
   if (mode === "vector") {
     try { kwargs.emo_vector = JSON.parse($("emo-vector").value); }

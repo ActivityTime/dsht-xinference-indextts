@@ -452,7 +452,7 @@ async def api_ttsform_save(request: Request):
               "emo_audio_lib", "emo_rule"):
         if k in body:
             value[k] = body[k]
-    if value.get("emo_mode") not in ("none", "vector", "text", "audio"):
+    if value.get("emo_mode") not in ("none", "auto", "vector", "text", "audio"):
         value["emo_mode"] = "none"
     _save_config("ttsform", value)
     return value
