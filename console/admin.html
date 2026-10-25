@@ -283,8 +283,8 @@ textarea{resize:vertical;min-height:6rem}
           <label class="f">instructions（OpenAI 标准字段：情绪指令「用X的语气说这句话。」或裸短语「温柔地」；适配层剥壳查映射）
             <input type="text" id="ad-instructions" placeholder="可选，如：用开心的语气说这句话。">
           </label>
-          <label class="f" style="margin-top:.75rem" title="正文中可用 #[文字情感][描述] / #[情感向量][1,0,...] / #[引导音频][root|rel] / #[音色分组][名] / #[情绪标签][标签] 内联覆盖默认行为（发送前自动剔除）">
-            input（纯正文；支持 #[模式][参数] 内联覆盖）
+          <label class="f" style="margin-top:.75rem" title="三类内联指令（每类首个生效，发送前剔除）：#[适配模式][文字情感|引导音频|切换音色|情绪向量|情绪映射]；#[情感控制][情绪向量][1,0,0,0,0,0,0,0]；#[情感控制][文字描述][文本]；#[参数][speed=1.2][diffusion_steps=16]（k=v 可多个）">
+            input（纯正文；支持三类内联指令：#[适配模式][..] / #[情感控制][..][..] / #[参数][k=v]..）
             <textarea id="ad-input" placeholder="大家好，欢迎体验……"></textarea>
           </label>
           <div class="grid2" style="margin-top:.75rem">
@@ -292,7 +292,7 @@ textarea{resize:vertical;min-height:6rem}
               model（可携带模式关键词，如 gpt-4o-切换音色；适配层路由到本机模型）
               <input type="text" id="ad-model" value="IndexTTS-2.5">
             </label>
-            <label class="f" title="支持逗号组合：「分组名,情绪词」（情绪词查情绪映射表）；#[音色分组][名] 内联可覆盖">
+            <label class="f" title="支持逗号组合：「分组名,情绪词」（情绪词查分组内标签）">
               voice（default / 分组名 / 「分组名,情绪词」逗号组合）
               <input type="text" id="ad-voice" value="default" list="ad-voice-list">
               <datalist id="ad-voice-list"></datalist>
@@ -436,7 +436,7 @@ textarea{resize:vertical;min-height:6rem}
           </label>
         </div>
         <div class="row" style="margin-top:.75rem">
-          <label class="f" style="min-width:22rem">OpenAI 适配默认行为（#[模式][参数] 内联可按请求覆盖）
+          <label class="f" style="min-width:22rem">OpenAI 适配默认行为（#[适配模式][..] 内联可按请求覆盖）
             <select id="def-mode" onchange="renderModeDesc()">
               <option value="text_emotion">文字情感：voice 定音色，instructions 定情感</option>
               <option value="guide_audio">引导音频：voice 定分组与默认音色，instructions 定引导音频</option>

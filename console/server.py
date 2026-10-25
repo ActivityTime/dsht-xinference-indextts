@@ -304,32 +304,90 @@ async def api_tts_adapter(request: Request):
     except json.JSONDecodeError:
         kwargs = {}
 
-    # ── 0) 内联 #[模式][参数] 覆盖（instructions/voice/input 三字段全扫，命中即剔除）──
-    INLINE_RE = re.compile(r"#\[([^" + chr(92) + "[" + chr(92) + "]]{1,20})" + chr(92) + "]" +
-                           chr(92) + "[([^" + chr(92) + "[" + chr(92) + "]]{1,400})" + chr(92) + "]")
+    # ── 0) 内联指令（#51 全新设计，三类；每类首个生效；类型间按 适配模式→情感控制→参数 应用）──
+    #  #[适配模式][五种模式名之一]      最高级覆盖适配模式（> model 关键词 > settings）
+    #  #[情感控制][情绪向量][1,0,...]    最高级覆盖情感（音色选择仍跟随适配模式）
+    #  #[情感控制][文字描述][文本]       同上
+    #  #[参数][k=v][k=v]...             最高级参数覆盖（speed 落标准字段，其余进 kwargs）
+    # 三字段全扫，命中即剔除；未识别的 #[..][..] 原样保留。
+    BS = chr(92)
+    NOBR = "[^" + BS + "[" + BS + "]]"
     overrides = {}
+    inline_params = {}
+    mode_kw_map = {}
+    for _m, _kws in ADAPTER_MODE_KEYWORDS:
+        for _kw in _kws:
+            mode_kw_map[_kw.lower()] = _m
+
+    def _collect_hits(pattern, text, hits):
+        def _sub(m):
+            hits.append(tuple(g.strip() for g in m.groups()))
+            return ""
+        return re.sub(pattern, _sub, text)
+
     for fname in ("instructions", "voice", "input"):
         t = str(data.get(fname) or "")
         if not t:
             continue
+        # ① 适配模式
+        mode_hits = []
+        t = _collect_hits("#" + BS + "[适配模式]" + BS + "[(" + NOBR + "{1,20})" + BS + "]", t, mode_hits)
+        if mode_hits and "adapter_mode" not in overrides:
+            overrides["adapter_mode"] = mode_hits[0][0]
+        # ② 情感控制（情绪向量 / 文字描述）
+        emo_hits = []
+        t = _collect_hits("#" + BS + "[情感控制]" + BS + "[(情绪向量|文字描述)]" + BS + "[(" + NOBR + "{1,400})" + BS + "]", t, emo_hits)
+        if emo_hits and "emotion" not in overrides:
+            overrides["emotion"] = emo_hits[0]
+        # ③ 参数（首个指令块的全部 k=v 生效）
+        param_hits = []
+        t = _collect_hits("#" + BS + "[参数]((?:" + BS + "[" + NOBR + "{1,100}" + BS + "]){1,20})", t, param_hits)
+        if param_hits and not inline_params:
+            for grp in re.findall(BS + "[(" + NOBR + "{1,100})" + BS + "]", param_hits[0][0]):
+                if "=" in grp:
+                    k, v = grp.split("=", 1)
+                    inline_params[k.strip()] = v.strip()
+        data[fname] = t.strip()
 
-        def _sub(m, fname=fname):
-            mode, param = m.group(1).strip(), m.group(2).strip()
-            key = {"文字情感": "emo_text", "情感向量": "emo_vector", "引导音频": "emo_ref",
-                   "音色分组": "voice_group", "情绪标签": "tag"}.get(mode)
-            if key is None:
-                return m.group(0)  # 未识别 → 原样保留
-            overrides[key] = param
-            report["inline"][f"{fname}:{mode}"] = param
-            return ""
-
-        data[fname] = INLINE_RE.sub(_sub, t).strip()
+    report["inline"] = {
+        "适配模式": overrides.get("adapter_mode"),
+        "情感控制": list(overrides["emotion"]) if "emotion" in overrides else None,
+        "参数": inline_params or None,
+    }
+    # 应用（执行顺序：适配模式在模式判定处生效；情感控制 → kwargs（explicit_emo 随之为真，
+    # 各模式情感注入自动让位，音色选择不受影响）；参数最后落 kwargs/speed）
+    if "emotion" in overrides:
+        kind, val = overrides["emotion"]
+        if kind == "情绪向量":
+            try:
+                kwargs["emo_vector"] = [float(x) for x in re.split(r"[，,]", val) if x.strip()]
+            except ValueError:
+                report["inline"]["情感控制"] = "向量格式错误，忽略"
+        elif kind == "文字描述":
+            kwargs["use_emo_text"] = True
+            kwargs["emo_text"] = val
+    for k, v in inline_params.items():
+        if k == "speed":
+            data["speed"] = v
+        elif re.fullmatch(r"-?\d+", v):
+            kwargs[k] = int(v)
+        elif re.fullmatch(r"-?\d+\.\d+", v):
+            kwargs[k] = float(v)
+        elif v.lower() in ("true", "false"):
+            kwargs[k] = v.lower() == "true"
+        else:
+            kwargs[k] = v
 
     # ── 1) 模式判定（提前：解析方式取决于模式；model 关键词可覆盖）──
     mode = _load_config("settings", {}).get("adapter_mode", "text_emotion")
     if mode not in ("text_emotion", "guide_audio", "group_switch", "vector", "emotion_map"):
         mode = "text_emotion"
     mode_source = "settings"
+    # 内联 #[适配模式][..] 最高级（> model 关键词 > settings 默认）
+    inline_mode = overrides.get("adapter_mode")
+    if inline_mode and inline_mode.lower() in mode_kw_map:
+        mode = mode_kw_map[inline_mode.lower()]
+        mode_source = "inline"
     model_lower = report["model"]["in"].lower()  # 原始 model 值（顶部已被改写为 MODEL_NAME）
     best = None  # (位置, mode)
     for m, kws in ADAPTER_MODE_KEYWORDS:
@@ -337,7 +395,7 @@ async def api_tts_adapter(request: Request):
             pos = model_lower.find(kw.lower())
             if pos >= 0 and (best is None or pos < best[0]):
                 best = (pos, m)
-    if best is not None:
+    if best is not None and mode_source != "inline":
         mode = best[1]
         mode_source = "model"
     report["mode"] = mode
