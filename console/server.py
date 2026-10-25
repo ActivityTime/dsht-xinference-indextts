@@ -1168,19 +1168,22 @@ SETTINGS_PARAM_KEYS = (
 
 
 def detect_language(text):
-    """language=Auto：按 input 主体语言字数判定（CJK 汉字/假文 vs 拉丁），中文兜底。"""
+    """language=Auto：按 input 主体语言字数判定——纯拉丁→EN、假名≥1/4 CJK→JA、
+    其余（含 CJK 混拉丁、空、纯数字符号）→ ZHEN（中英混合模式兜底，zh 规范化 +
+    接受中英混排，对中文为主的台词最安全，#62）。"""
     t = str(text or "")
     cjk = sum(1 for c in t if '\u4e00' <= c <= '\u9fff' or '\u3040' <= c <= '\u30ff' or '\uac00' <= c <= '\ud7af')
     latin = sum(1 for c in t if c.isascii() and c.isalpha())
     if cjk == 0 and latin > 0:
         return "EN"
     if cjk > 0:
-        # 汉字为主 → 区分假名（日）与纯中文：假名占比高判 JA
         kana = sum(1 for c in t if '\u3040' <= c <= '\u30ff')
-        if kana * 4 >= cjk and kana > 0:
+        if kana > 0 and kana * 4 >= cjk:
             return "JA"
+        if latin >= cjk:  # 拉丁字母不少于汉字才判中英混合（阈值过低的杂散字母不算）
+            return "ZHEN"
         return "ZH"
-    return "ZH"
+    return "ZHEN"
 
 
 @app.get("/api/settings")

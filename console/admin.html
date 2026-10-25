@@ -1208,7 +1208,7 @@ async function saveDefaults() {
 /* ── API 配置页参数清单（与 server SETTINGS_PARAM_KEYS 同步；空白=上游默认）── */
 const API_PARAMS = {
   openai: [
-    ["lang", "语言", "select", "Auto", "Auto（按 input 主体语言检测，中文兜底）/ ZH / EN / JA / ZHEN（中英混合）"],
+    ["lang", "语言", "select", "Auto", "Auto（按 input 主体语言字数检测：纯拉丁→EN、假名≥1/4→JA、其余→ZHEN 兜底）/ ZH / EN / JA / ZHEN（中英混合，zh 规范化+接受混排）"],
     ["speed", "语速 speed", "number", "1.0", "OpenAI 标准 0.25–4.0；默认 1.0。IndexTTS 映射为 duration_factor=1/speed"],
     ["response_format", "输出格式", "select", "wav", "wav / mp3 / flac / ogg（上游 soundfile 编码；OpenAI 的 opus/aac/pcm 不适用）"],
     ["emo_alpha", "情感强度 emo_alpha", "number", "1.0", "0–1，默认 1.0=全强度。官方文档定义范围 0.0–1.0；引导音频来自他人时泄漏明显建议 0.5 以下；与参考音频同源时强制 1.0（模型行为），调低无意义"],

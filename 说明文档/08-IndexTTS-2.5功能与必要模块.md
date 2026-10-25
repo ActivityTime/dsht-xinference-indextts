@@ -198,8 +198,9 @@ model_uid = client.launch_model(
 ② wrapper `indextts2.py:189-192`：language/lang 都缺省时默认 `"ZH"`；
 ③ 结果 = 按 ZH 处理（`<|zh|>` 前缀 + 中文 ITN + 转小写）。
 
-**语言 Auto（控制台，#60）**：API 配置页语言选 Auto 时，按 **input 主体语言字数**检测——
-纯拉丁 → EN；假名占 CJK ≥1/4 → JA；其余 CJK → ZH（**中文兜底**）；空文本 → ZH。
+**语言 Auto（控制台，#60/#62）**：API 配置页语言选 Auto 时，按 **input 主体语言字数**检测——
+纯拉丁 → EN；假名占 CJK ≥1/4 → JA；拉丁字母 ≥ 汉字 → ZHEN（中英混合）；纯汉字 → ZH；
+**空/纯数字符号 → ZHEN 兜底**（中英混合模式：zh 规范化 + 接受混排，对无法判定最安全）。
 
 **实用推论**：
 1. **语言与音色/情绪完全解耦**——language 只作用于文本前端，参考音频决定音色；
