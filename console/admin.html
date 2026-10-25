@@ -422,21 +422,16 @@ textarea{resize:vertical;min-height:6rem}
       <h2 class="page-title">API 配置</h2>
       <p class="page-sub">合成默认参数（新请求自动套用）；服务端点只读展示。</p>
       <div class="card">
-        <h3>默认参数</h3>
-        <div class="grid2">
-          <label class="f">默认语言
-            <select id="def-lang"><option value="ZH">中文 (ZH)</option><option value="EN">英文 (EN)</option><option value="JA">日文 (JA)</option><option value="ZHEN">中英混合 (ZHEN)</option></select>
-          </label>
-          <label class="f">默认语速
-            <input type="number" id="def-speed" value="1.0" step="0.05" min="0.5" max="2.0">
-          </label>
-          <label class="f">默认输出格式
-            <select id="def-fmt"><option value="wav">wav</option><option value="mp3">mp3</option></select>
-          </label>
-          <label class="f">默认 emo_alpha
-            <input type="number" id="def-alpha" value="1.0" step="0.05" min="0" max="1">
-          </label>
-        </div>
+        <h3>OpenAI 通用参数（空白 = 默认值；对 API 未传参数生效）</h3>
+        <div class="advgrid" id="apiparam-openai"></div>
+      </div>
+      <div class="card">
+        <h3>IndexTTS 参数（空白 = 上游默认；对 API 未传参数生效，显式请求/内联 #[参数] 优先）</h3>
+        <div class="advgrid" id="apiparam-indextts"></div>
+      </div>
+      <div class="card">
+        <h3>默认参数（旧字段兼容展示）</h3>
+        <div class="advgrid" id="apiparam-legacy" style="display:none"></div>
         <div class="row" style="margin-top:.75rem">
           <label class="f" style="min-width:22rem">OpenAI 适配默认行为（#[适配模式][..] 内联可按请求覆盖）
             <select id="def-mode" onchange="renderModeDesc()">
@@ -1187,13 +1182,10 @@ async function saveVectorMap() {
 /* ── API 配置页 ── */
 async function loadApiPage() {
   try {
-    const s = await (await fetch("/api/settings")).json();
-    $("def-lang").value = s.lang ?? "ZH";
-    $("def-speed").value = s.speed ?? 1.0;
-    $("def-fmt").value = s.response_format ?? "wav";
-    $("def-alpha").value = s.emo_alpha ?? 1.0;
-    $("def-parse").checked = s.parse_instruction !== false;
-    $("def-mode").value = s.adapter_mode ?? "text_emotion";
+    const st = await (await fetch("/api/settings")).json();
+    renderApiParamValues(st);
+    $("def-parse").checked = st.parse_instruction !== false;
+    $("def-mode").value = st.adapter_mode ?? "text_emotion";
     renderModeDesc();
   } catch { toast("读取默认参数失败", true); }
   try {
@@ -1207,15 +1199,38 @@ async function loadApiPage() {
   } catch {}
 }
 async function saveDefaults() {
-  const body = {
-    lang: $("def-lang").value, speed: parseFloat($("def-speed").value) || 1.0,
-    response_format: $("def-fmt").value, emo_alpha: parseFloat($("def-alpha").value) || 1.0,
-    parse_instruction: $("def-parse").checked, adapter_mode: $("def-mode").value,
-  };
+  const body = { ...collectApiParams(),
+    parse_instruction: $("def-parse").checked, adapter_mode: $("def-mode").value };
   await (await fetch("/api/settings", { method: "POST",
     headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
-  toast("API 默认参数已保存");
+  toast("API 默认参数已保存（空白项=走默认值；对 API 未传参数生效）");
 }
+/* ── API 配置页参数清单（与 server SETTINGS_PARAM_KEYS 同步；空白=上游默认）── */
+const API_PARAMS = {
+  openai: [
+    ["lang", "语言", "select", "Auto", "Auto（按 input 主体语言检测，中文兜底）/ ZH / EN / JA / ZHEN（中英混合）"],
+    ["speed", "语速 speed", "number", "1.0", "OpenAI 标准 0.25–4.0；默认 1.0。IndexTTS 映射为 duration_factor=1/speed"],
+    ["response_format", "输出格式", "select", "wav", "wav / mp3 / flac / ogg（上游 soundfile 编码；OpenAI 的 opus/aac/pcm 不适用）"],
+    ["emo_alpha", "情感强度 emo_alpha", "number", "1.0", "0–1，默认 1.0=全强度。官方文档定义范围 0.0–1.0；引导音频来自他人时泄漏明显建议 0.5 以下；与参考音频同源时强制 1.0（模型行为），调低无意义"],
+  ],
+  indextts: [
+    ["seed", "随机种子", "number", "0", "默认 0 固定；同参数同种子可复现（包装层 set_all_random_seed）"],
+    ["diffusion_steps", "扩散步数", "number", "25", "默认 25（官方 infer_v2_5）。建议 12–16 试听、25 成品、>40 边际收益；越高越稳越慢（实测 1 步 3.3s vs 200 步 10.7s）"],
+    ["inference_cfg_rate", "CFG 强度", "number", "0.7", "默认 0.7（官方）。建议 0.3–1.0：越高情感/语气越强，过高易发音不稳"],
+    ["temperature", "GPT temperature", "number", "0.8", "默认 0.8（官方 webui）。建议 0.6–1.0：过高漏字/怪音，过低平淡"],
+    ["top_p", "top_p", "number", "0.8", "默认 0.8（官方）。建议 0.6–0.95"],
+    ["top_k", "top_k", "number", "30", "默认 30（官方）。建议 20–60"],
+    ["num_beams", "num_beams 束搜索", "number", "3", "默认 3（官方）。建议 1–5：>1 显著变慢，求速度设 1"],
+    ["length_penalty", "length_penalty", "number", "0", "默认 0 中性。建议 -2～2：正值倾向更长生成"],
+    ["repetition_penalty", "repetition_penalty", "number", "10", "默认 10（官方，强力防复读）。建议 8–15；下调有复读风险"],
+    ["max_mel_tokens", "max_mel_tokens", "number", "1500", "默认 1500；硬上限 1815（模型 config）。超长文本靠分段，勿调大"],
+    ["max_text_tokens_per_segment", "分段最大 token", "number", "120", "默认 120（官方）。建议 80–300：低=更稳，高=更连贯；10GB 卡 low-vram 自动按 40 字符分块"],
+    ["interval_silence", "段间静音 ms", "number", "200", "默认 200ms（官方）。建议 100–500；多段合成的段间停顿"],
+    ["use_random", "情绪矩阵随机", "checkbox", "", "默认关=按参考音频 style 余弦最相似选情感矩阵行；开=随机（同 seed 可复现）"],
+    ["text_normalization", "文本规范化", "checkbox-on", "", "默认开：数字/符号转读法（zh/zhen/en 用 ITN，ja/es 用 NeMo）；仅正文已高度规范化才关"],
+  ],
+};
+
 /* ── OpenAI 适配默认行为：模式说明（与 server.py api_tts_adapter 实现同步） ── */
 const ADAPTER_MODE_DESCS = {
   text_emotion:
@@ -1254,6 +1269,51 @@ function renderModeDesc() {
   const box = $("mode-desc");
   box.style.display = "";
   box.textContent = ADAPTER_MODE_DESCS[v] ?? "";
+}
+
+/* ── API 配置页参数卡（空白=默认；两块：OpenAI 通用 / IndexTTS） ── */
+function renderApiParams() {
+  const langOpts = ["Auto", "ZH", "EN", "JA", "ZHEN"];
+  for (const [box, defs] of [["apiparam-openai", API_PARAMS.openai], ["apiparam-indextts", API_PARAMS.indextts]]) {
+    $(box).innerHTML = defs.map(([k, label, type, ph, hint]) => {
+      const t = type === "checkbox" || type === "checkbox-on" || type === "select";
+      const ctrl = type === "select"
+        ? `<select data-apip="${k}" data-t="select">${langOpts.map((o) => `<option value="${o}">${o}</option>`).join("")}</select>`
+        : t
+          ? `<input type="checkbox" data-apip="${k}" data-t="${type}" style="width:auto" ${type === "checkbox-on" ? "checked" : ""}>`
+          : `<input type="number" data-apip="${k}" data-t="number" placeholder="${ph}">`;
+      return `<label class="f" style="min-width:15rem" title="${esc(hint)}">${label}
+        ${t ? `<span style="display:flex;align-items:center;gap:.375rem">${ctrl}</span>` : ctrl}
+        <span style="font-size:.6875rem;color:hsl(var(--muted-foreground));line-height:1.3">${esc(hint)}</span>
+      </label>`;
+    }).join("");
+  }
+}
+function collectApiParams() {
+  const out = {};
+  document.querySelectorAll("[data-apip]").forEach((inp) => {
+    const k = inp.dataset.apip, t = inp.dataset.t;
+    if (t === "checkbox") { if (inp.checked) out[k] = true; }
+    else if (t === "checkbox-on") { out[k] = inp.checked; }
+    else if (t === "select") { if (inp.value) out[k] = inp.value; }
+    else { const v = String(inp.value).trim(); if (v !== "") out[k] = Number(v); }
+  });
+  return out;
+}
+function renderApiParamValues(values) {
+  document.querySelectorAll("[data-apip]").forEach((inp) => {
+    const k = inp.dataset.apip, t = inp.dataset.t, v = (values ?? {})[k];
+    if (v === undefined || v === null || v === "") {
+      if (t === "checkbox") inp.checked = false;
+      else if (t === "checkbox-on") inp.checked = true;
+      else if (t === "select") inp.value = "Auto";
+      else inp.value = "";
+      return;
+    }
+    if (t === "checkbox") inp.checked = v === true;
+    else if (t === "checkbox-on") inp.checked = v !== false;
+    else inp.value = String(v);
+  });
 }
 
 /* ── 语音合成页默认填写状态（独立于 API 配置页的默认参数；含整页全部选项与输入） ── */
@@ -1533,6 +1593,7 @@ async function init() {
   refreshAll();
   renderAdvanced("adv-direct");
   renderAdvanced("adv-adapter");
+  renderApiParams();
   await applyDefaultsToForm();
   applyAdapterDefaults();
   setInterval(refreshAll, 15000);

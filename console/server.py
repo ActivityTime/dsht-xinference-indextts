@@ -312,6 +312,28 @@ def _migrate_audio_ref(item):
     return item
 
 
+def _apply_settings_defaults(kwargs, data, text):
+    """API 配置页参数作为所有未传参数的默认值（空白配置=不填=上游默认）；
+    language=Auto 按 input 主体语言检测（中文兜底）。"""
+    st = _load_config("settings", {})
+    # OpenAI 通用：lang（含 Auto）/speed/response_format
+    lang = st.get("lang", "Auto")
+    if lang == "Auto":
+        lang = detect_language(text)
+    kwargs.setdefault("language", str(lang).upper())
+    if st.get("response_format"):
+        data["response_format"] = st["response_format"]
+    if isinstance(st.get("speed"), (int, float)):
+        data["speed"] = str(st["speed"])
+    # IndexTTS 高级参数：数值/布尔进 kwargs（显式请求与内联 #[参数] 优先，此处 setdefault）
+    for k in ("emo_alpha", "seed", "diffusion_steps", "inference_cfg_rate", "temperature",
+              "top_p", "top_k", "num_beams", "length_penalty", "repetition_penalty",
+              "max_mel_tokens", "max_text_tokens_per_segment", "interval_silence",
+              "use_random", "text_normalization"):
+        if k in st and k not in kwargs:
+            kwargs[k] = st[k]
+
+
 def rules_for_adapter():
     # #49：情绪映射「通用拦截」已停用（各模式不再自动匹配正文/voice 短语注入情感），
     # 等待重新设计。映射页与 /api/emotions 端点保留可编辑，仅适配层不再消费。
@@ -561,7 +583,7 @@ async def api_tts_adapter(request: Request):
         data["input"] = (text.strip() or str(data.get("input") or "").strip())
         report["residual"] = data["input"]
         report["tag"] = ""
-        kwargs.setdefault("language", "ZH")
+        _apply_settings_defaults(kwargs, data, text)
         data["kwargs"] = json.dumps(kwargs, ensure_ascii=False)
         if not files.get("prompt_speech"):
             return JSONResponse(
@@ -635,7 +657,7 @@ async def api_tts_adapter(request: Request):
                         kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
         data["input"] = (text.strip() or str(data.get("input") or "").strip())
         report["residual"] = data["input"]
-        kwargs.setdefault("language", "ZH")
+        _apply_settings_defaults(kwargs, data, text)
         data["kwargs"] = json.dumps(kwargs, ensure_ascii=False)
         if not files.get("prompt_speech"):
             return JSONResponse(
@@ -721,7 +743,7 @@ async def api_tts_adapter(request: Request):
                 report["emotion"] = {"source": "mapping", "action": hit["action"]}
         data["input"] = (text.strip() or str(data.get("input") or "").strip())
         report["residual"] = data["input"]
-        kwargs.setdefault("language", "ZH")
+        _apply_settings_defaults(kwargs, data, text)
         data["kwargs"] = json.dumps(kwargs, ensure_ascii=False)
         if not files.get("prompt_speech"):
             return JSONResponse(
@@ -835,7 +857,7 @@ async def api_tts_adapter(request: Request):
                 _apply_param_json(hit_item.get("params_json"))
         data["input"] = (text.strip() or str(data.get("input") or "").strip())
         report["residual"] = data["input"]
-        kwargs.setdefault("language", "ZH")
+        _apply_settings_defaults(kwargs, data, text)
         data["kwargs"] = json.dumps(kwargs, ensure_ascii=False)
         if not files.get("prompt_speech"):
             return JSONResponse(
@@ -901,7 +923,7 @@ async def api_tts_adapter(request: Request):
                         kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
     data["input"] = (text.strip() or str(data.get("input") or "").strip())
     report["residual"] = data["input"]
-    kwargs.setdefault("language", "ZH")
+    _apply_settings_defaults(kwargs, data, text)
     data["kwargs"] = json.dumps(kwargs, ensure_ascii=False)
     if not files.get("prompt_speech"):
         return JSONResponse(
@@ -1133,10 +1155,38 @@ def _save_config(name: str, value):
     logger.info("CONFIG SAVED %s", name)
 
 
+# API 配置页参数清单（与前端 API_PARAMS_DEF 对应；空白=不写=上游默认）。
+# IndexTTS 参数 = kwargs 键；OpenAI 通用 = 标准请求字段。
+SETTINGS_PARAM_KEYS = (
+    # OpenAI 通用
+    "lang", "speed", "response_format", "emo_alpha",
+    # IndexTTS 高级（kwargs）
+    "seed", "diffusion_steps", "inference_cfg_rate", "temperature", "top_p", "top_k",
+    "num_beams", "length_penalty", "repetition_penalty", "max_mel_tokens",
+    "max_text_tokens_per_segment", "interval_silence", "use_random", "text_normalization",
+)
+
+
+def detect_language(text):
+    """language=Auto：按 input 主体语言字数判定（CJK 汉字/假文 vs 拉丁），中文兜底。"""
+    t = str(text or "")
+    cjk = sum(1 for c in t if '\u4e00' <= c <= '\u9fff' or '\u3040' <= c <= '\u30ff' or '\uac00' <= c <= '\ud7af')
+    latin = sum(1 for c in t if c.isascii() and c.isalpha())
+    if cjk == 0 and latin > 0:
+        return "EN"
+    if cjk > 0:
+        # 汉字为主 → 区分假名（日）与纯中文：假名占比高判 JA
+        kana = sum(1 for c in t if '\u3040' <= c <= '\u30ff')
+        if kana * 4 >= cjk and kana > 0:
+            return "JA"
+        return "ZH"
+    return "ZH"
+
+
 @app.get("/api/settings")
 def api_settings_get():
     value = _load_config("settings", {
-        "lang": "ZH", "speed": 1.0, "response_format": "wav", "emo_alpha": 1.0,
+        "lang": "Auto", "speed": None, "response_format": "", "emo_alpha": None,
         "parse_instruction": True, "adapter_mode": "text_emotion",
     })
     # 迁移：v1 的 auto_emotion（关键词自动匹配，已废弃）→ parse_instruction（DSHT 情绪指令解析）
@@ -1149,10 +1199,21 @@ def api_settings_get():
 async def api_settings_save(request: Request):
     body = await request.json()
     value = _load_config("settings", {})
-    for k in ("lang", "speed", "response_format", "emo_alpha", "parse_instruction",
-              "auto_emotion", "adapter_mode"):
+    for k in SETTINGS_PARAM_KEYS + ("parse_instruction", "auto_emotion", "adapter_mode"):
         if k in body:
-            value[k] = body[k]
+            v = body[k]
+            if v == "" or v is None:
+                value.pop(k, None)  # 空白=不配置=走上游默认
+                continue
+            if k in ("speed", "emo_alpha", "seed", "diffusion_steps", "inference_cfg_rate",
+                     "temperature", "top_p", "top_k", "num_beams", "length_penalty",
+                     "repetition_penalty", "max_mel_tokens", "max_text_tokens_per_segment",
+                     "interval_silence"):
+                try:
+                    v = float(v) if ("." in str(v) or k in ("speed", "emo_alpha", "inference_cfg_rate", "temperature", "top_p", "length_penalty")) else int(v)
+                except (TypeError, ValueError):
+                    continue
+            value[k] = v
     if value.get("adapter_mode") not in ("text_emotion", "guide_audio", "group_switch", "vector", "emotion_map", None, ""):
         value["adapter_mode"] = "text_emotion"
     if "auto_emotion" in value:  # 保存时完成迁移
