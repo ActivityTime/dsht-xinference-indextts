@@ -378,10 +378,15 @@ async def api_tts_adapter(request: Request):
             overrides["adapter_mode"] = mode_hits[0][0]
         # ② 情感控制（情绪向量 / 文字描述）
         emo_hits = []
-        t = _collect_hits("#" + BS + "[情感控制]" + BS + "[(情绪向量|文字描述)]" + BS + "[(" + NOBR + "{1,400})" + BS + "]", t, emo_hits)
+        t = _collect_hits("#" + BS + "[情感控制]" + BS + "[(情绪向量|文字描述|引导音频)]" + BS + "[(" + NOBR + "{1,400})" + BS + "]", t, emo_hits)
         if emo_hits and "emotion" not in overrides:
             overrides["emotion"] = emo_hits[0]
-        # ③ 参数（首个指令块的全部 k=v 生效）
+        # ③ 音色选择（最高级覆盖 prompt_speech；格式 库名/相对路径）
+        vp_hits = []
+        t = _collect_hits("#" + BS + "[音色选择]" + BS + "[(" + NOBR + "{1,400})" + BS + "]", t, vp_hits)
+        if vp_hits and "voice_pick" not in overrides:
+            overrides["voice_pick"] = vp_hits[0][0]
+        # ④ 参数（首个指令块的全部 k=v 生效）
         param_hits = []
         t = _collect_hits("#" + BS + "[参数]((?:" + BS + "[" + NOBR + "{1,100}" + BS + "]){1,20})", t, param_hits)
         if param_hits and not inline_params:
@@ -394,10 +399,16 @@ async def api_tts_adapter(request: Request):
     report["inline"] = {
         "适配模式": overrides.get("adapter_mode"),
         "情感控制": list(overrides["emotion"]) if "emotion" in overrides else None,
+        "音色选择": overrides.get("voice_pick"),
         "参数": inline_params or None,
     }
     # 应用（执行顺序：适配模式在模式判定处生效；情感控制 → kwargs（explicit_emo 随之为真，
     # 各模式情感注入自动让位，音色选择不受影响）；参数最后落 kwargs/speed）
+    def _ref_from_name(val):
+        """库名/相对路径（正斜杠）→ 条目引用 dict（rel 转反斜杠）。"""
+        rn, _, relfw = str(val).partition("/")
+        return {"root_name": rn.strip(), "rel": relfw.strip().replace("/", chr(92))}
+
     if "emotion" in overrides:
         kind, val = overrides["emotion"]
         if kind == "情绪向量":
@@ -408,6 +419,24 @@ async def api_tts_adapter(request: Request):
         elif kind == "文字描述":
             kwargs["use_emo_text"] = True
             kwargs["emo_text"] = val
+        elif kind == "引导音频":
+            item = _ref_from_name(val)
+            gp, note = _audio_ref_path(item, _load_library())
+            if gp is not None:
+                kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
+            else:
+                report.setdefault("inline_errors", []).append(
+                    {"指令": "情感控制/引导音频", "值": val, "note": note})
+    if "voice_pick" in overrides:
+        item = _ref_from_name(overrides["voice_pick"])
+        vp_path, note = _audio_ref_path(item, _load_library())
+        if vp_path is not None:
+            files["prompt_speech"] = (vp_path.name, vp_path.read_bytes(), "application/octet-stream")
+            ref_info = {"source": "inline_voice_pick", "rel": str(item["rel"]),
+                        "name": overrides["voice_pick"], "sha256": _sha256_file(vp_path)[:16]}
+        else:
+            report.setdefault("inline_errors", []).append(
+                {"指令": "音色选择", "值": overrides["voice_pick"], "note": note})
     for k, v in inline_params.items():
         if k == "speed":
             data["speed"] = v
@@ -1014,6 +1043,11 @@ async def api_library_save(request: Request):
         path = str(r.get("path", "")).strip()
         if path:
             roots.append({"name": name, "path": path})
+    # 唯一键原则：库名被条目（root_name）外部引用，禁止重名/空名
+    names = [r["name"] for r in roots]
+    dup = {n for n in names if names.count(n) > 1 or not n.strip()}
+    if dup:
+        return JSONResponse({"detail": f"库名必须唯一且非空，重复/空名: {sorted(dup)}"}, status_code=400)
     _save_library(roots)
     logger.info("LIBRARY SAVED roots=%d", len(roots))
     return api_library()
@@ -1288,6 +1322,11 @@ def api_groups_get():
 async def api_groups_save(request: Request):
     body = await request.json()
     groups = body.get("groups", [])
+    # 唯一键原则：分组名被情绪映射条目/voice 引用，禁止重名
+    gnames = [str(g.get("name", "")).strip() for g in groups]
+    gdup = {n for n in gnames if gnames.count(n) > 1 or not n}
+    if gdup:
+        return JSONResponse({"detail": f"分组名必须唯一且非空，重复/空名: {sorted(gdup)}"}, status_code=400)
     for g in groups:
         g["name"] = str(g.get("name", "")).strip()
         for m in g.get("members", []):
