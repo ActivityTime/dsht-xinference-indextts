@@ -422,15 +422,7 @@ textarea{resize:vertical;min-height:6rem}
       <h2 class="page-title">API 配置</h2>
       <p class="page-sub">合成默认参数（新请求自动套用）；服务端点只读展示。</p>
       <div class="card">
-        <h3>OpenAI 通用参数（空白 = 默认值；对 API 未传参数生效）</h3>
-        <div class="advgrid" id="apiparam-openai"></div>
-      </div>
-      <div class="card">
-        <h3>IndexTTS 参数（空白 = 上游默认；对 API 未传参数生效，显式请求/内联 #[参数] 优先）</h3>
-        <div class="advgrid" id="apiparam-indextts"></div>
-      </div>
-      <div class="card">
-        <h3>默认参数（旧字段兼容展示）</h3>
+        <h3>默认适配行为（适配默认模式；请求内联 #[适配模式] 可覆盖）</h3>
         <div class="advgrid" id="apiparam-legacy" style="display:none"></div>
         <div class="row" style="margin-top:.75rem">
           <label class="f" style="min-width:22rem">OpenAI 适配默认行为（#[适配模式][..] 内联可按请求覆盖）
@@ -442,12 +434,17 @@ textarea{resize:vertical;min-height:6rem}
               <option value="emotion_map">情绪映射：条目绑定分组，有序子条目（音频/向量/文字）按顺序命中</option>
             </select>
           </label>
-          <label class="f" style="flex-direction:row;align-items:center;gap:.375rem">解析 DSHT 情绪指令
-            <input type="checkbox" id="def-parse" style="width:auto">
-          </label>
           <button class="btn btn-primary" style="margin-left:auto" onclick="saveDefaults()">保存默认参数</button>
         </div>
         <div class="log" id="mode-desc" style="display:none"></div>
+      </div>
+      <div class="card">
+        <h3>OpenAI 通用参数（空白 = 默认值；对 API 未传参数生效）</h3>
+        <div class="advgrid" id="apiparam-openai"></div>
+      </div>
+      <div class="card">
+        <h3>IndexTTS 参数（空白 = 上游默认；对 API 未传参数生效，显式请求/内联 #[参数] 优先）</h3>
+        <div class="advgrid" id="apiparam-indextts"></div>
       </div>
       <div class="card">
         <h3>服务端点（只读，改端点请编辑 config.ps1）</h3>
@@ -1184,8 +1181,7 @@ async function loadApiPage() {
   try {
     const st = await (await fetch("/api/settings")).json();
     renderApiParamValues(st);
-    $("def-parse").checked = st.parse_instruction !== false;
-    $("def-mode").value = st.adapter_mode ?? "text_emotion";
+    $("def-mode").value = st.adapter_mode ?? "emotion_map";
     renderModeDesc();
   } catch { toast("读取默认参数失败", true); }
   try {
@@ -1200,7 +1196,7 @@ async function loadApiPage() {
 }
 async function saveDefaults() {
   const body = { ...collectApiParams(),
-    parse_instruction: $("def-parse").checked, adapter_mode: $("def-mode").value };
+    adapter_mode: $("def-mode").value };
   await (await fetch("/api/settings", { method: "POST",
     headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
   toast("API 默认参数已保存（空白项=走默认值；对 API 未传参数生效）");

@@ -481,7 +481,7 @@ async def api_tts_adapter(request: Request):
             kwargs[k] = v
 
     # ── 1) 模式判定（提前：解析方式取决于模式；model 关键词可覆盖）──
-    mode = _load_config("settings", {}).get("adapter_mode", "text_emotion")
+    mode = _load_config("settings", {}).get("adapter_mode", "emotion_map")
     if mode not in ("text_emotion", "guide_audio", "group_switch", "vector", "emotion_map"):
         mode = "text_emotion"
     mode_source = "settings"
@@ -832,6 +832,30 @@ async def api_tts_adapter(request: Request):
                 kwargs["use_emo_text"] = True
                 kwargs["emo_text"] = instructions
                 report["emotion"] = {"source": "fallback_text", "text": instructions[:60]}
+        # 回退（#64）：本分组未配置情绪映射条目 → 退化「引导音频」行为：
+        # 按成员标签子串命中(instructions 优先、voice 剩余段次之、成员序=优先级)取引导音频作
+        # emo_prompt_speech_b64；音色仍取分组默认成员(上方已定)。
+        # 仅 entry 为 None 且用户未显式指定情感时生效。
+        if entry is None and not explicit_emo and not any(
+                k in kwargs for k in ("emo_vector", "use_emo_text", "emo_prompt_speech_b64")):
+            _ga_tag = ""
+            _ga_member = None
+            for mm in members:
+                lbl = str(mm.get("label", ""))
+                if lbl and instructions and lbl.lower() in instructions.lower():
+                    _ga_member, _ga_tag = mm, lbl
+                    break
+            if _ga_member is None:
+                for mm in members:
+                    lbl = str(mm.get("label", ""))
+                    if lbl and any(lbl.lower() in seg.lower() for seg in remaining):
+                        _ga_member, _ga_tag = mm, lbl
+                        break
+            if _ga_member is not None:
+                _ga_path = _member_audio(_ga_member)
+                if _ga_path is not None:
+                    kwargs["emo_prompt_speech_b64"] = base64.b64encode(_ga_path.read_bytes()).decode("ascii")
+                    report["emotion"] = {"source": "guide_audio_fallback", "audio": _ga_path.name, "label": _ga_tag}
         # 参数覆盖链（#[参数] 内联 > 子条目 JSON > 条目 JSON > 请求 kwargs；speed 落标准字段）
         def _apply_param_json(raw):
             if not raw:
@@ -1190,11 +1214,8 @@ def detect_language(text):
 def api_settings_get():
     value = _load_config("settings", {
         "lang": "Auto", "speed": None, "response_format": "", "emo_alpha": None,
-        "parse_instruction": True, "adapter_mode": "text_emotion",
+        "adapter_mode": "emotion_map",
     })
-    # 迁移：v1 的 auto_emotion（关键词自动匹配，已废弃）→ parse_instruction（DSHT 情绪指令解析）
-    if "parse_instruction" not in value and "auto_emotion" in value:
-        value["parse_instruction"] = bool(value.pop("auto_emotion"))
     return value
 
 
@@ -1202,7 +1223,7 @@ def api_settings_get():
 async def api_settings_save(request: Request):
     body = await request.json()
     value = _load_config("settings", {})
-    for k in SETTINGS_PARAM_KEYS + ("parse_instruction", "auto_emotion", "adapter_mode"):
+    for k in SETTINGS_PARAM_KEYS + ("adapter_mode",):
         if k in body:
             v = body[k]
             if v == "" or v is None:
@@ -1219,8 +1240,6 @@ async def api_settings_save(request: Request):
             value[k] = v
     if value.get("adapter_mode") not in ("text_emotion", "guide_audio", "group_switch", "vector", "emotion_map", None, ""):
         value["adapter_mode"] = "text_emotion"
-    if "auto_emotion" in value:  # 保存时完成迁移
-        value["parse_instruction"] = bool(value.pop("auto_emotion"))
     _save_config("settings", value)
     return value
 

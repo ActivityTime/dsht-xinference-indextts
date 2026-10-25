@@ -37,6 +37,10 @@ LOG_FILE = os.path.join(BASE_DIR, "logs", "monitor.log")
 LAUNCH_SCRIPT = os.path.join(BASE_DIR, "scripts", "launch_indextts.py")
 VENV_PY = os.path.join(BASE_DIR, "venv", "Scripts", "python.exe")
 XINFERENCE_LOCAL = os.path.join(BASE_DIR, "venv", "Scripts", "xinference-local.exe")
+# 控制台（9998）自愈参数：从已注入环境变量读，无则取默认值；路径从 BASE_DIR 推导，无绝对路径。
+CONSOLE_PORT = int(os.environ.get("CONSOLE_PORT", "9998"))
+CONSOLE_SCRIPT = os.path.join(BASE_DIR, "console", "server.py")
+REF_AUDIO_LIB = os.environ.get("REF_AUDIO_LIB", "")
 
 
 def log(msg):
@@ -212,6 +216,43 @@ def check_service_singleton():
         log("无进程监听 %s" % PORT)
 
 
+def console_ready():
+    """探测控制台 9998 是否存活（TCP 连接）。"""
+    try:
+        import socket
+        s = socket.create_connection(("127.0.0.1", CONSOLE_PORT), timeout=3)
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
+def ensure_console():
+    """控制台单例 + 自愈：9998 不在 -> 用已注入环境变量拉起控制台。
+
+    控制台是静态页 + 代理，秒起、不占显存；但此前无人看守，死了不会自起
+    （#64：互为孤儿）。此处补齐它的监护人。
+    """
+    if console_ready():
+        log("控制台单例正常: 端口 %s" % CONSOLE_PORT)
+        return
+    log("控制台未存活，尝试启动 console/server.py ...")
+    try:
+        env = dict(os.environ)
+        env.setdefault("XINFERENCE_ENDPOINT", ENDPOINT)
+        env.setdefault("MODEL_NAME", MODEL)
+        env.setdefault("CONSOLE_PORT", str(CONSOLE_PORT))
+        env.setdefault("REF_AUDIO_LIB", REF_AUDIO_LIB)
+        proc = subprocess.Popen(
+            [VENV_PY, CONSOLE_SCRIPT], env=env, cwd=BASE_DIR,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            stdout=open(os.devnull, "w"), stderr=open(os.devnull, "w"),
+        )
+        log("控制台已拉起 PID=%s" % proc.pid)
+    except Exception as e:
+        log("启动控制台失败: %s" % e)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--once", action="store_true", help="只检查一轮")
@@ -227,11 +268,13 @@ def main():
     if args.once:
         check_service_singleton()
         ensure_service_and_model()
+        ensure_console()
     else:
         while True:
             try:
                 check_service_singleton()
                 ensure_service_and_model()
+                ensure_console()
             except Exception as e:
                 log("监控循环异常: %s" % traceback.format_exc())
             time.sleep(args.interval)
