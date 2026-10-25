@@ -30,7 +30,7 @@ IndexTTS-2.5 是 Bilibili IndexTeam 的**零样本（zero-shot）TTS** 模型：
 | `s2mel.pth` | **语音→mel 解码器** | flow-matching 生成 mel 谱 | fp32 | 0.40 GB |
 | `feat1.pt` / `feat2.pt` | 说话人特征 | 音色特征（配合说话人编码器） | — | ~0.5 MB |
 | `wav2vec2bert_stats.pt` | 语义统计 | 语义模型归一化统计 | — | <1 MB |
-| `multilingual_zh_ja_yue_char_del.tiktoken` | 多语言 tokenizer | 中/英/日/西/阿 文本分词 | — | 0.9 MB |
+| `multilingual_zh_ja_yue_char_del.tiktoken` | 多语言 tokenizer | Whisper 风格 99 语言文本分词（TTS 实际处理 zh/zhen/en/ja/es） | — | 0.9 MB |
 | `config.yaml` | 模型配置 | GPT/条件模块/情感模块结构定义 | — | <1 MB |
 
 > 推理时还会加载辅助模块：**BigVGAN 声码器**（mel→波形）、**ECAPA-TDNN（campplus）说话人编码器**（提取音色嵌入）——由 Xinference 内置的 IndexTTS 运行时（`thirdparty\indextts\`）提供。
@@ -188,19 +188,33 @@ model_uid = client.launch_model(
 | ① 语言 token 前缀 | 每段 tokenize 前拼 `<|zh|> ` 等；分段 token 预算含前缀 |
 | ② 文本规范化分派 | `zh/zhen/en` → 内置 ITN（数字/符号转读法，"3.14"→"三点一四"）；`ja/es` → NeMo 规范化；**其他语言不做规范化** |
 | ③ 大小写处理 | `ja/zh/zhen/en` → 转小写；`es` → 转大写；其他不动 |
-| ④ 发音标注/G2P | `<文字|发音>` 标注通用；`ja` 额外走 JapaneseG2P 假名处理 |
+| ④ 发音标注/G2P | `<文字|发音>` 标注通用；`ja` 额外走 `process_ja_text`（JapaneseG2P 假名处理） |
 
-**支持的值**：词表层 99 语言码均可拼 token；**官方实测保证中/英/日/西/阿**（README）；
-`zhen` = 中英混合（zh 规范化 + 接受中英混排）。
+**支持的值**：词表层 99 语言码均可拼 token（未知 lang 兜底 `common`）；但**TTS 文本处理链
+真正处理的语种只有 5 个：`zh / zhen / en / ja / es`**（`infer_v2_5.py:731-740`）：
+
+| 语种 | 规范化 | 大小写 | 额外处理 |
+|---|---|---|---|
+| `zh` `zhen` `en` | 内置 ITN（数字/符号转读法） | 转小写 | — |
+| `ja` `es` | NeMo 规范化 | `ja` 转小写、`es` 转大写 | `ja` 额外走 `process_ja_text`（JapaneseG2P 假名处理） |
+| 其他 | 不做规范化 | 不动 | — |
+
+- `zhen` = 中英混合（zh 风格 ITN + 接受中英混排；`lang_to_token('zhen')` 回落 `common` 多语种 token）；
+- **`ar`（阿拉伯语）不在 TTS 文本处理链**——它只存在于 tokenizer 的 Whisper ASR 语种表，
+  传 `AR` 只拿 arabic token、无任何 TTS 文本特化。早期"五语种含阿"的结论源自官方 README
+  训练口径，本机推理口径不含阿（详见 问题记录 #70 前的核查）。
 
 **不传 language 的行为（三层兜底，恒等于 ZH）**：
 ① 控制台适配层各分支 `kwargs.setdefault("language", ...)`（API 配置页 lang，默认 Auto）；
 ② wrapper `indextts2.py:189-192`：language/lang 都缺省时默认 `"ZH"`；
 ③ 结果 = 按 ZH 处理（`<|zh|>` 前缀 + 中文 ITN + 转小写）。
 
-**语言 Auto（控制台，#60/#62）**：API 配置页语言选 Auto 时，按 **input 主体语言字数**检测——
-纯拉丁 → EN；假名占 CJK ≥1/4 → JA；拉丁字母 ≥ 汉字 → ZHEN（中英混合）；纯汉字 → ZH；
+**语言 Auto（控制台，#60/#62/#71）**：API 配置页语言选 Auto 时，按 **input 主体语言**检测——
+**含任意假名（U+3040–30FF）即判 JA**（假名仅日文独有，中英文文本不会出现，不会误判）；
+纯拉丁 → EN；拉丁字母 ≥ 汉字 → ZHEN（中英混合）；其余（含纯汉字）→ ZH；
 **空/纯数字符号 → ZHEN 兜底**（中英混合模式：zh 规范化 + 接受混排，对无法判定最安全）。
+> 阈值修正记录：旧版要求「假名 ≥ 汉字的 1/4」才判 JA，导致「日本語の勉強」这类汉字为主的
+> 日文被误判为 ZH（走中文 G2P）。#71 已改为含假名即 JA。
 
 **实用推论**：
 1. **语言与音色/情绪完全解耦**——language 只作用于文本前端，参考音频决定音色；

@@ -39,9 +39,21 @@ def check(name, ok, detail=""):
 
 
 def http_get(url, timeout=20):
+    # 本地回环直连：本机环境可能设了 HTTP_PROXY（WorkBuddy 沙箱），
+    # urllib 默认会走代理导致 502/连不上——显式禁代理。
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     req = urllib.request.Request(url)
     req.add_header("Accept", "*/*")
-    return urllib.request.urlopen(req, timeout=timeout)
+    return opener.open(req, timeout=timeout)
+
+
+def is_service_up():
+    """9998 是否可达（T3/T4/T6 依赖运行中的服务）。"""
+    try:
+        http_get("http://127.0.0.1:9998/api/health", timeout=5)
+        return True
+    except Exception:
+        return False
 
 
 # ───────────────────────── T1 编译 / 导入 ─────────────────────────
@@ -106,6 +118,9 @@ print(json.dumps(out, ensure_ascii=False))
 # ───────────────────────── T3 /api/reflib/file ─────────────────────────
 def t3_reflib_file():
     print("\n── T3 /api/reflib/file 接受库名与索引 ──")
+    if not is_service_up():
+        check("服务运行中（9998）", False, "服务未运行——此项需先启动服务（不影响代码正确性结论）")
+        return
     try:
         d = json.load(http_get("http://127.0.0.1:9998/api/reflib", timeout=60))
     except Exception as e:
@@ -133,6 +148,9 @@ def t3_reflib_file():
 # ───────────────────────── T4 引用体检 ─────────────────────────
 def t4_refs_health():
     print("\n── T4 引用体检 /api/refs/health ──")
+    if not is_service_up():
+        check("服务运行中（9998）", False, "服务未运行——此项需先启动服务（不影响代码正确性结论）")
+        return
     try:
         d = json.load(http_get("http://127.0.0.1:9998/api/refs/health", timeout=60))
         probs = d.get("problems") or []
@@ -188,6 +206,10 @@ print(json.dumps(out, ensure_ascii=False))
 # ───────────────────────── T6 三端口存活 ─────────────────────────
 def t6_ports():
     print("\n── T6 三端口存活 ──")
+    if not is_service_up():
+        check("服务运行中（9996/9997/9998）", False,
+              "服务未运行——需双击 启动语音服务.cmd（不影响代码正确性结论）")
+        return
     for port, label, path in ((9996, "监控状态页", "/status"), (9997, "Xinference 服务", "/status"),
                               (9998, "Web 控制台", "/api/health")):
         try:

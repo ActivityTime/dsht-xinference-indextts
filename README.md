@@ -21,9 +21,9 @@ DSHT / 任意 OpenAI 客户端零改动接入：`voice` 填**音色分组名**�
 
 **4. 可视化映射配置**：音色分组（成员 ↑↓ 排序 = 标签匹配优先级；单向子串匹配）、情绪映射条目（绑定分组 + 有序子条目：标签-音频/向量/文字混排、音频可勾「替换默认音色」、未命中回退开关链、条目与子条目参数覆盖 JSON）、向量映射（条目级启用/停用）。
 
-**5. Web 控制台**（9998，8 页）：状态总览（GPU/模型/缓存统计）、双模式合成测试台（14 项高级参数带默认值/建议范围/依据，留空=上游默认；最终 kwargs 预览）、参考音频库（多根可配、搜索、试听、「复制名称」一键取完整引用名）、请求历史归档（含失败，试听/删除）、引用体检。
+**5. Web 控制台**（9998，8 页）：状态总览（GPU/模型/缓存统计）、双模式合成测试台（14 项高级参数带默认值/建议范围/依据，留空=上游默认；最终 kwargs 预览）、参考音频库（多根可配、搜索、试听、每条目「复制名 / 复制音色指令 / 复制情感指令」）、请求历史归档（含失败，试听/删除）、引用体检。
 
-**6. 引用唯一键与自愈**：音频外部引用一律 `库名/相对路径`（库名/分组名保存时校验唯一，抗库源重排）；失效引用进报告不再静默；「引用体检」一键扫全部条目。
+**6. 引用唯一键与自愈**：音频外部引用**一律以库名开头**——配置框用 `库名|相对路径`、正文内联指令用 `库名/相对路径`（**禁用 int 序号**：序号是库源排列位置，增删/重排即全体错位且静默失效）；库名/分组名保存时校验唯一；失效引用进报告不再静默；「引用体检」一键扫全部条目。
 
 **7. 性能与资源**：gpt.pth mmap 加载（内存峰值约减半）、同参数 LRU 缓存（参考音频按内容哈希，改名/换客户端仍命中）、QwenEmotion 惰性唤醒（默认不占 1.2-2.5G 显存，功能不丢）、bf16。
 
@@ -91,7 +91,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\start_xinference_indextts.ps1
 downloads\venv-main\Scripts\python.exe scripts\selftest.py
 ```
 
-18 项（编译 / 引用格式 / 内联指令 / 三端口存活 / 前端语法 / 复制逻辑）。
+15 项（编译 / 引用格式 / 内联指令 / 引用接口 / 三端口存活 / 前端语法 / 复制逻辑；其中 3 项需服务在跑）。
 
 ---
 
@@ -129,21 +129,23 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\start_xinference_indextts.ps1
 ├─ rebuild_downloads.ps1                 # 一键重建下载区（权重 HF + torch cu128 + pip 依赖）
 ├─ config.ps1                            # 中央配置（路径相对定位、功能开关；自动加载 ↓）
 ├─ config.local.ps1                      # 本机专属配置（git 忽略；参考音频库路径等）
-├─ console\                              # Web 控制台（自包含；#32–#72）
-│  ├─ admin.html                         #   页面（状态/合成×2模式/音色库/情绪映射/音色分组/向量映射/API配置/历史）
-│  ├─ server.py                          #   后端（9998；/v1/audio/speech 适配层 + 管理 API + 归档/缓存/日志）
+├─ console\                              # Web 控制台（自包含；#32–#73）
+│  ├─ admin.html / server.py / status.html #  页面 + 后端（9998）+ 通用状态页
 │  └─ library.json / *_defaults.json 等  #   运行时配置与产物（git 忽略）
 ├─ maintained\                           # 自维护资产（git 跟踪，无外部源）
 │  ├─ xinference-package\                # 自维护 Xinference 包（禁止下载；含 mmap/bf16/高级参数等修改；
 │  │                                     #   thirdparty 已精简至 2.3MB；内置 WebUI 已拆除）
 │  ├─ requirements-venv-main.txt         # 主 venv 依赖清单（重建依据；含控制台的 fastapi/uvicorn/requests）
 │  └─ requirements-venv-v4.txt           # v4 模型环境依赖清单
-├─ scripts\                              # install.ps1 / launch_indextts.py / monitor_indextts.py / tts_test.py / acl_fix.ps1
-│                                        #   + selftest.py（回归 18 项）/ test_copy_logic.js / migrate_refs_to_rootname.py
-├─ 说明文档\（01–09） 问题记录\           # 文档与排障史（72 条；09 为控制台/适配层权威语义）
+├─ scripts\                              # install/launch/monitor/tts_test/acl_fix
+│                                        #   + selftest.py（回归 15 项）/ test_copy_logic.js / migrate_refs_to_rootname.py
+├─ 说明文档\（01–09） 问题记录\           # 文档与排障史（73 条；09 为控制台/适配层权威语义）
+├─ HANDOVER.md                           # 交接总结（现场状态 / 必读顺序 / 十条约定）
 ├─ venv\            → junction → downloads\venv-main
 └─ downloads\                           # 可下载区（git 忽略；rebuild 一键重建：权重/两 venv/torch wheel）
 ```
+
+> 完整目录树、文件归属与 git 跟踪明细见 **`说明文档/06-文件夹结构.md`**。
 
 ## 版本追踪（git）
 
@@ -166,7 +168,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\start_xinference_indextts.ps1
 | 健康探测 | `/status`（`/health` 404）；**模型列表在 `/v1/models`**（#55） | 4.x 行为 |
 | 模型精度 | `use_bf16=true` | 权重全精度加载时 cast bf16（10GB 显存更稳） |
 
-## 已知的坑（详见 问题记录/问题记录.md，72 条）
+## 已知的坑（详见 问题记录/问题记录.md，73 条）
 
 1. **torch 导入 WinError 5**：System32 MSVC/OpenMP ACL 损坏 → `acl_fix.ps1`。
 2. **默认 CPU torch**：`install.ps1` 自动换装 cu128（torch 2.11.0+cu128）。

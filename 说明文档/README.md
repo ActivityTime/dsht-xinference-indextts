@@ -1,7 +1,7 @@
 # 本地动漫角色 TTS 方案 · 文档总索引
 
 > 项目：DSH-Tavern 本地动漫角色语音合成（IndexTTS-2.5 + Xinference）
-> 整理日期：2026-10-24 · 存放位置：`<部署根>\说明文档`
+> 整理日期：2026-10-25 · 存放位置：`<部署根>\说明文档`
 > 一句话结论：**用 Xinference 4.0.1 当底座跑 IndexTTS-2.5（bf16），对 DSH-Tavern 提供 OpenAI 兼容 `/v1/audio/speech`，零样本克隆 + 免逐字稿 + 情绪控制三项全实测通过。**
 
 ---
@@ -31,7 +31,7 @@
 | `06-文件夹结构.md` | 完整目录树 + 文件归属/git 跟踪 + 可重建性 | 摸清部署根结构 |
 | `07-IndexTTS-2.5功能开关与动态加载方案.md` | 权重→功能→代码映射、开关矩阵、惰性加载语义 | 功能开关/瘦身时看 |
 | `08-IndexTTS-2.5功能与必要模块.md` | 功能清单 × 必要模块 × 使用参数（含五种调用示例） | **功能速查/接功能时看** |
-| `09-控制台与适配层完整参考.md` | Web 控制台 8 页 × 五种适配模式 × 四类内联指令 × 音频引用格式 × 端点契约 × 可部署性 | **控制台/适配层权威语义（#32–#56）** |
+| `09-控制台与适配层完整参考.md` | Web 控制台 8 页 × 五种适配模式 × 四类内联指令 × 音频引用格式 × 端点契约 × 可部署性 | **控制台/适配层权威语义（#32–#73）** |
 | `整体方案架构图.html` | 可视化架构图（完整链路 + VRAM 仲裁） | 一眼看懂 |
 | `Xinference项目架构图.html` | 底座（Xinference）内部部署图 | 排障时看底座细节 |
 | `官方仓库.txt` | 官方 git / 文档 / 权重地址 | 溯源 |
@@ -47,8 +47,8 @@
 | 直连端点 | `http://127.0.0.1:9997/v1`（无适配层，仅 multipart + prompt_speech） |
 | 启动命令 | `xinference-local --host 127.0.0.1 --port 9997` |
 | 环境变量 | `XINFERENCE_HEALTH_CHECK_TIMEOUT=180`、`XINFERENCE_AUTH_ADVANCED=0`、`HF_ENDPOINT=https://hf-mirror.com`、`HF_HUB_DISABLE_XET=1` |
-| 模型 | IndexTTS-2.5（全精度 fp32 ~6GB，无量化；`use_bf16=True` 为加载时 cast） |
-| 语种 | `ZH / EN / JA / ES / AR` |
+| 模型 | IndexTTS-2.5（fp32 权重 ~6GB；`use_bf16=True` 为**加载时 cast**，显存约 6GB） |
+| 语种 | **TTS 文本处理链实际处理：`ZH / ZHEN / EN / JA / ES`**（`zhen`=中英混合；`ar` 仅在 ASR 语种表，TTS 不处理，详见 `08` 第五节） |
 | 情绪向量 | `[happy,angry,sad,afraid,disgusted,melancholic,surprised,calm]` 8 维 |
 | 一键启动 | `start_xinference_indextts.ps1` / `.bat`（起 9997 → 加载模型 → 起控制台 9998 → 守护） |
 | 合成测试 | 控制台「语音合成」页（双模式）；或 `python scripts/tts_test.py <参考wav> <文本> <输出> <JA\|ZH> [emo_vector_json]` |
@@ -68,7 +68,7 @@
 - `...\formatted-omnivoice-dsht-guide.md` / `.html` —— OmniVoice Studio（VoiceStudio）DSHT 对接指南
 - `...\OmniVoice部署调研.md` / `...\OmniVoice_Windows整合包调研.md` —— OmniVoice 落地调研
 - `...\VoiceStudio后端WinError5根因与处置-2026-10-24.md` —— System32 VCOMP140.DLL ACL 损坏根因（已弃用 VoiceStudio）
-- `<部署根>\问题记录\问题记录.md` —— 全量排障记录（13 条）
+- `<部署根>\问题记录\问题记录.md` —— 全量排障记录（73 条）
 
 > 以上原始文档未移动、未改写，均保留原位，仅在本索引登记导航。
 
