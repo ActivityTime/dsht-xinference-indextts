@@ -86,11 +86,20 @@ def api_config():
 
 @app.get("/api/status")
 def api_status():
+    """状态总览数据：/status（uptime/workers/GPU）+ /v1/models（运行模型——
+    4.x 的 /status 不含模型列表，此前的卡片因此恒空）。"""
     try:
-        r = requests.get(XINFERENCE_ENDPOINT + "/status", timeout=5)
-        return JSONResponse(r.json(), status_code=r.status_code)
+        base = requests.get(XINFERENCE_ENDPOINT + "/status", timeout=5).json()
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"detail": f"Xinference 不可达: {e}"}, status_code=502)
+    out = {"uptime": base.get("uptime"), "workers": base.get("workers")}
+    try:
+        m = requests.get(XINFERENCE_ENDPOINT + "/v1/models", timeout=5).json()
+        out["models"] = {x.get("id", "?"): {"model_name": x.get("model_name"), "address": x.get("address")}
+                         for x in m.get("data", [])}
+    except Exception:  # noqa: BLE001
+        out["models"] = {}
+    return out
 
 
 # ────────────────────────── 合成代理（缓存 + 归档 + 日志） ──────────────────────────

@@ -612,14 +612,23 @@ async function refreshAll() {
   try {
     const st = await (await fetch("/api/status")).json();
     const models = st.models ?? {};
-    const uid = Object.keys(models)[0];
-    const running = uid && models[uid]?.model_name;
+    const uids = Object.keys(models);
+    const running = uids.map((u) => models[u]?.model_name).filter(Boolean);
     setPill("pill-svc", "svc-text", "ok", "服务运行中");
-    setPill("pill-model", "model-text", running ? "ok" : "warn", running ? "模型已加载: " + running : "模型未加载");
+    setPill("pill-model", "model-text", running.length ? "ok" : "warn",
+      running.length ? "模型已加载: " + running.join(", ") : "模型未加载");
+    const up = Number(st.uptime);
+    const upStr = Number.isFinite(up) ? `${Math.floor(up / 3600)}h ${Math.floor((up % 3600) / 60)}m` : "-";
+    const wkeys = Object.keys(st.workers ?? {});
+    const w = wkeys.length ? st.workers[wkeys[0]] : null;
+    const gpu = w?.status?.["gpu-0"];
+    const gb = (x) => (x / 1073741824).toFixed(1);
     $("status-kv").innerHTML =
-      `<dt>endpoint</dt><dd>${esc(st.backend ?? "-")}</dd>` +
-      `<dt>运行模型数</dt><dd>${Object.keys(models).length}</dd>` +
-      (uid ? `<dt>model_uid</dt><dd>${esc(uid)}</dd><dt>状态</dt><dd>${esc(models[uid]?.state ?? "-")}</dd>` : "");
+      `<dt>运行模型数</dt><dd>${uids.length}${running.length ? "（" + esc(running.join(", ")) + "）" : ""}</dd>` +
+      `<dt>运行时长</dt><dd>${upStr}</dd>` +
+      (w ? `<dt>worker</dt><dd>${esc(wkeys[0])}</dd>` : "") +
+      (gpu ? `<dt>GPU</dt><dd>${esc(gpu.name)} · ${gb(gpu.mem_used)} / ${gb(gpu.mem_total)} GB（${(gpu.mem_usage * 100).toFixed(0)}%）</dd>` : "") +
+      (w?.status?.cpu ? `<dt>CPU/内存</dt><dd>${(w.status.cpu.usage * 100).toFixed(0)}% · ${gb(w.status.cpu.memory_used)} / ${gb(w.status.cpu.memory_total)} GB</dd>` : "");
   } catch {
     setPill("pill-svc", "svc-text", "bad", "服务未运行");
     setPill("pill-model", "model-text", "warn", "模型未知");
