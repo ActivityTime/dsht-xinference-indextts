@@ -46,3 +46,4 @@ console/tts_defaults.json
 console/adapter_defaults.json
 console/vector_map.json
 console/emotion_mappings.json
+config.local.ps1

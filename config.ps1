@@ -1,4 +1,4 @@
-# =============================================================
+﻿# =============================================================
 #  Xinference Central Config (config-driven, 2026-10-24)
 #  Rules:
 #   1) Internal paths are resolved RELATIVE to this file (NO absolute paths).
@@ -48,7 +48,12 @@ $env:MODEL_NAME                      = $Script:ModelName
 $env:USE_QWEN_EMO                    = 'false'
 $env:QWEN_DEVICE                     = 'auto'
 $env:CONSOLE_PORT                    = $Script:ConsolePort
-$env:REF_AUDIO_LIB                   = 'I:\SomeResources\VoiceClonePrompt-ForOmniVoice'  # 参考音频库（只读使用）
+# 参考音频库根（只读使用）。本机专属绝对路径放 config.local.ps1（git 忽略），勿写进仓库：
+#   config.local.ps1 内容示例：$Script:RefAudioLib = 'I:\SomeResources\VoiceClonePrompt-ForOmniVoice'
+$Script:RefAudioLib = ''
+$localCfg = Join-Path $Script:BaseDir 'config.local.ps1'
+if (Test-Path -LiteralPath $localCfg) { . $localCfg }
+$env:REF_AUDIO_LIB                   = $Script:RefAudioLib
 
 # ---- External dependency list (explicit; runtime or usage-time resources) ----
 # Chinese full notes: ..\说明文档\05-外部引用与配置.md

@@ -46,8 +46,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\start_xinference_indextts.ps1
 - Web 控制台（独立，推荐）：<http://127.0.0.1:9998>（随启动脚本自动拉起）
   - 状态总览 / 语音合成（同参数自动缓存命中）/ 参考音频库（多根可配置，页面内增删库源）/ 请求历史（每次请求含失败自动归档，可试听/删除/清空）
   - 归档与缓存落 `console/history/`、`console/cache/`（git 忽略）；日志 `console/console.log`
-- OpenAI 兼容端点：<http://127.0.0.1:9997/v1>
-- DSH-Tavern Provider Endpoint → `http://127.0.0.1:9997/v1`
+- **DSH-Tavern Provider Endpoint → `http://127.0.0.1:9998/v1`**（控制台适配层：voice=音色分组名/「分组名,情绪词」、情绪指令解析、四类内联指令；模型名填 `gpt-4o-mini-tts` 才会触发 DSHT 发送情绪指令）
+- 直连端点（无适配层，仅 multipart + prompt_speech 可用）：<http://127.0.0.1:9997/v1>
 
 > 内置 WebUI 已拆除（与 IndexTTS-2.5 运行无关，问题记录 #32）：`http://127.0.0.1:9997/` 返回 JSON 404，服务纯 API 化。
 
