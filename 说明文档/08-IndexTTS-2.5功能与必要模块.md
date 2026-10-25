@@ -3,7 +3,7 @@
 > 整理日期：2026-10-24
 > 定位：本文档回答「IndexTTS-2.5 有哪些功能、每个功能需要加载哪些模块、怎么用」。使用方式详细步骤见 `04-使用文档.md`；模块开关与动态加载方案见 `07-IndexTTS-2.5功能开关与动态加载方案.md`；本文档与两者配合，不重复展开。
 > 部署形态：Xinference 4.0.1（`xinference-local --host 127.0.0.1 --port 9997`）+ IndexTTS-2.5（`use_bf16=true`）
-> 权重路径：`K:\SomeApps\Xinference\.xinference\huggingface\models--IndexTeam--IndexTTS-2.5\snapshots\<commit>\`
+> 权重路径：`<部署根>\.xinference\huggingface\models--IndexTeam--IndexTTS-2.5\snapshots\<commit>\`
 
 ---
 
@@ -123,7 +123,7 @@ import openai
 
 client = openai.Client(
     api_key="cannot be empty",
-    base_url="http://127.0.0.1:9997/v1",
+    base_url="http://127.0.0.1:9998/v1",  # 适配层（9997 直连需 multipart+prompt_speech）
 )
 response = client.audio.speech.create(
     model="IndexTTS-2.5",
@@ -142,7 +142,7 @@ response.write_to_file("out.wav")
 ### 4.3 cURL（HTTP 直调）
 
 ```bash
-curl -X 'POST' 'http://127.0.0.1:9997/v1/audio/speech' \
+curl -X 'POST' 'http://127.0.0.1:9998/v1/audio/speech' \
   -H 'accept: application/json' \
   -H 'Content-Type: application/json' \
   -d '{

@@ -1,7 +1,7 @@
 # 本地动漫角色 TTS 方案 · 文档总索引
 
 > 项目：DSH-Tavern 本地动漫角色语音合成（IndexTTS-2.5 + Xinference）
-> 整理日期：2026-10-24 · 存放位置：`K:\SomeApps\Xinference\说明文档`
+> 整理日期：2026-10-24 · 存放位置：`<部署根>\说明文档`
 > 一句话结论：**用 Xinference 4.0.1 当底座跑 IndexTTS-2.5（bf16），对 DSH-Tavern 提供 OpenAI 兼容 `/v1/audio/speech`，零样本克隆 + 免逐字稿 + 情绪控制三项全实测通过。**
 
 ---
@@ -42,15 +42,16 @@
 
 | 项 | 值 |
 |---|---|
-| 服务地址 | `http://127.0.0.1:9997`（`/status`=200；`/health` 404 属正常） |
-| DSH-Tavern 接入 | Provider Endpoint → `http://127.0.0.1:9997/v1`，模型 `IndexTTS-2.5` |
+| 控制台（推荐入口） | `http://127.0.0.1:9998`（Web 管理 + 适配层 `/v1/audio/speech`） |
+| DSH-Tavern 接入 | Provider Endpoint → `http://127.0.0.1:9998/v1`，模型名 `gpt-4o-mini-tts`（voice=分组名；详见 `09`） |
+| 直连端点 | `http://127.0.0.1:9997/v1`（无适配层，仅 multipart + prompt_speech） |
 | 启动命令 | `xinference-local --host 127.0.0.1 --port 9997` |
 | 环境变量 | `XINFERENCE_HEALTH_CHECK_TIMEOUT=180`、`XINFERENCE_AUTH_ADVANCED=0`、`HF_ENDPOINT=https://hf-mirror.com`、`HF_HUB_DISABLE_XET=1` |
 | 模型 | IndexTTS-2.5（全精度 fp32 ~6GB，无量化；`use_bf16=True` 为加载时 cast） |
 | 语种 | `ZH / EN / JA / ES / AR` |
 | 情绪向量 | `[happy,angry,sad,afraid,disgusted,melancholic,surprised,calm]` 8 维 |
-| 一键启动 | `K:\SomeApps\Xinference\start_xinference_indextts.ps1` / `.bat`，桌面快捷方式 |
-| 合成测试 | `python K:\SomeApps\Xinference\tts_test.py <参考wav> <文本> <输出> <JA\|ZH> [emo_vector_json]` |
+| 一键启动 | `start_xinference_indextts.ps1` / `.bat`（起 9997 → 加载模型 → 起控制台 9998 → 守护） |
+| 合成测试 | 控制台「语音合成」页（双模式）；或 `python scripts/tts_test.py <参考wav> <文本> <输出> <JA\|ZH> [emo_vector_json]` |
 | 参考音频库 | `I:\SomeResources\VoiceClonePrompt-ForOmniVoice\prompt`（详见 `02`） |
 
 ---
@@ -67,7 +68,7 @@
 - `...\formatted-omnivoice-dsht-guide.md` / `.html` —— OmniVoice Studio（VoiceStudio）DSHT 对接指南
 - `...\OmniVoice部署调研.md` / `...\OmniVoice_Windows整合包调研.md` —— OmniVoice 落地调研
 - `...\VoiceStudio后端WinError5根因与处置-2026-10-24.md` —— System32 VCOMP140.DLL ACL 损坏根因（已弃用 VoiceStudio）
-- `K:\SomeApps\Xinference\问题记录\问题记录.md` —— 全量排障记录（13 条）
+- `<部署根>\问题记录\问题记录.md` —— 全量排障记录（13 条）
 
 > 以上原始文档未移动、未改写，均保留原位，仅在本索引登记导航。
 
@@ -76,4 +77,4 @@
 ## 五、当前主线与待办
 
 - **已全线跑通并实测**：日语克隆（四糸乃）、开心情绪、中文克隆（牧濑红莉栖），三份 wav 在项目目录。
-- **数据收拢完成（2026-10-24）**：模型/运行数据 17.9GB 已从用户目录收拢到 `K:\SomeApps\Xinference\.xinference`，`XINFERENCE_HOME` 已设，旧目录已删。VRAM 保护阈值本地放宽（0.90→0.75）后模型加载与合成恢复正常（详见问题记录 #14）。
+- **数据收拢完成（2026-10-24）**：模型/运行数据 17.9GB 已从用户目录收拢到 `<部署根>\.xinference`，`XINFERENCE_HOME` 已设，旧目录已删。VRAM 保护阈值本地放宽（0.90→0.75）后模型加载与合成恢复正常（详见问题记录 #14）。
