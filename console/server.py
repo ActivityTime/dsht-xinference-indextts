@@ -29,6 +29,7 @@ from urllib.parse import quote
 import requests
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 CONSOLE_DIR = Path(__file__).resolve().parent
 BASE_DIR = CONSOLE_DIR.parent
@@ -63,11 +64,33 @@ app = FastAPI(title="IndexTTS-2.5 Console", docs_url=None, redoc_url=None, opena
 
 # ────────────────────────── 页面 / 基础 ──────────────────────────
 
+def _build_id():
+    """页面版本标识：基于 admin.html 的 mtime+size（改动即变），用于页面标题/角标，
+    便于确认浏览器加载的是最新代码（本地控制台迭代频繁，旧缓存最易误判）。"""
+    try:
+        st = ADMIN_HTML.stat()
+        return "%s-%s" % (time.strftime("%m%d", time.localtime(st.st_mtime)), hashlib.md5(
+            f"{st.st_mtime_ns}-{st.st_size}".encode()).hexdigest()[:4])
+    except OSError:
+        return "0000"
+
+
 @app.get("/")
 def index():
-    # no-cache：页面随代码更新，浏览器必须每次校验（否则改版后一直看旧缓存）
-    return FileResponse(ADMIN_HTML, media_type="text/html; charset=utf-8",
-                        headers={"cache-control": "no-cache"})
+    # no-store：页面随代码更新，浏览器不得缓存（本地控制台改版频繁，
+    # 缓存旧页面会导致"改了没生效/功能看着像坏了"的假象）
+    bid = _build_id()
+    try:
+        html = ADMIN_HTML.read_text(encoding="utf-8")
+    except OSError:
+        html = ""
+    if html:
+        html = html.replace("<title>IndexTTS-2.5 控制台</title>",
+                            f"<title>IndexTTS-2.5 控制台 · {bid}</title>")
+        html = html.replace("<body>", f'<body data-build="{bid}">', 1)
+    return Response(content=html, media_type="text/html; charset=utf-8",
+                    headers={"cache-control": "no-store, no-cache, must-revalidate",
+                             "pragma": "no-cache", "expires": "0"})
 
 
 @app.get("/api/config")
@@ -220,8 +243,11 @@ async def _proxy_tts(data: dict, files: dict, ref_info: dict, adapter_report: di
     upstream_ms = None
     try:
         t_up = time.perf_counter()
-        upstream = requests.post(
-            XINFERENCE_ENDPOINT + "/v1/audio/speech", data=data, files=files, timeout=600)
+        # 阻塞式 requests.post 放到线程池，避免长时间合成堵死事件循环
+        # （否则一次合成 ≤600s 期间 /api/health、配置存取全部冻结，探活误判 console 已死）
+        upstream = await run_in_threadpool(
+            lambda: requests.post(
+                XINFERENCE_ENDPOINT + "/v1/audio/speech", data=data, files=files, timeout=600))
         upstream_ms = round((time.perf_counter() - t_up) * 1000)
     except Exception as e:  # noqa: BLE001
         logger.error("UPSTREAM FAIL input=%r err=%s", data.get("input", "")[:60], e)
@@ -266,9 +292,13 @@ async def _proxy_tts(data: dict, files: dict, ref_info: dict, adapter_report: di
         except OSError as e:
             logger.error("CACHE STORE FAIL: %s", e)
 
-    logger.info("TTS status=%d upstream_ms=%s total_ms=%d bytes=%d input=%r",
+    try:
+        _kw_lang = (json.loads(data.get("kwargs") or "{}") or {}).get("language", "?")
+    except Exception:
+        _kw_lang = "?"
+    logger.info("TTS status=%d upstream_ms=%s total_ms=%d bytes=%d lang=%s input=%r",
                 upstream.status_code, upstream_ms, total_ms, len(upstream.content),
-                str(data.get("input", ""))[:60])
+                _kw_lang, str(data.get("input", ""))[:60])
     headers = {"X-Cache": "miss", "X-Cache-Key": cache_key or ""}
     if adapter_report is not None:
         headers["X-Adapter-Report"] = quote(json.dumps(adapter_report, ensure_ascii=False))
@@ -314,10 +344,14 @@ def _resolve_lib_root(roots, ref):
     """库源引用解析：优先按名（root_name，抗重排）；回退旧 int 索引。
     返回 (root_dict, degraded)；解析失败 (None, reason)。"""
     if isinstance(ref, str) and ref:
+        s = ref.strip()
         for r in roots:
-            if r.get("name") == ref:
+            if r.get("name") == s:
                 return r, None
-        return None, f"库源名不存在: {ref}"
+        # 按名未命中：若形似旧索引（纯数字）→ 回退索引解析（老配置/外部粘贴仍可用）
+        if not s.isdigit():
+            return None, f"库源名不存在: {ref}"
+        ref = int(s)
     try:
         ri = int(ref)
     except (TypeError, ValueError):
@@ -340,6 +374,22 @@ def _audio_ref_path(item, roots):
     return path, note
 
 
+def _ref_from_piped(val, roots):
+    """「库引用|相对路径」→ (Path, note)。库引用优先按库名匹配（抗库源重排），
+    回退旧 int 索引（老配置/外部脚本粘贴的索引格式仍可用，但会带降级提示）。"""
+    rr = str(val or "").split("|", 1)
+    if len(rr) != 2:
+        return None, f"非法引用格式（应为 库名|相对路径）: {val}"
+    root, note = _resolve_lib_root(roots, rr[0].strip())
+    if root is None:
+        return None, note
+    rel = rr[1].strip()
+    path = Path(root["path"]) / rel
+    if not path.is_file():
+        return None, f"文件不存在: {root['name']}::{rel}"
+    return path, note
+
+
 def _migrate_audio_ref(item):
     """旧格式 root(int 索引) → root_name(库名)；已有 root_name 或索引失效则原样。"""
     if item.get("root_name") or "root" not in item:
@@ -352,15 +402,38 @@ def _migrate_audio_ref(item):
     return item
 
 
+def _migrate_piped_ref(val):
+    """「索引|相对路径」→「库名|相对路径」（抗库源重排）；已是库名则原样。"""
+    s = str(val or "").strip()
+    if not s or "|" not in s:
+        return s
+    ref, _, rel = s.partition("|")
+    ref = ref.strip()
+    if not ref.isdigit():
+        return s  # 已是库名
+    root, _ = _resolve_lib_root(_load_library(), ref)
+    if root is None:
+        return s  # 索引失效，保持原样（由引用体检报失效）
+    return f"{root['name']}|{rel}"
+
+
 def _apply_settings_defaults(kwargs, data, text):
     """API 配置页参数作为所有未传参数的默认值（空白配置=不填=上游默认）；
-    language=Auto 按 input 主体语言检测（中文兜底）。"""
+    language 解析优先级：请求显式传 Auto / 留空 = 按 input 检测（detect_language）；
+    请求显式传 ZH/EN/JA/ZHEN = 尊重之；请求未传且 settings.lang=Auto = 检测，
+    否则用 settings.lang 显式值。（直接配置页曾默认 ZH、无 Auto 选项，导致日文被当中文，#fix）"""
     st = _load_config("settings", {})
-    # OpenAI 通用：lang（含 Auto）/speed/response_format
-    lang = st.get("lang", "Auto")
-    if lang == "Auto":
-        lang = detect_language(text)
-    kwargs.setdefault("language", str(lang).upper())
+    # OpenAI 通用：language（含 Auto）/speed/response_format
+    req_lang = kwargs.get("language")
+    req_lang_u = str(req_lang or "").strip().upper()
+    setting_lang = str(st.get("lang", "Auto")).strip().upper()
+    if req_lang_u == "AUTO":                      # 直接配置页选 Auto：始终按文本检测
+        final_lang = detect_language(text)
+    elif req_lang_u in ("", "NONE", "NULL"):       # 未传：用 settings 默认（Auto→检测，显式值→用之）
+        final_lang = detect_language(text) if setting_lang == "AUTO" else setting_lang
+    else:                                          # 显式指定 ZH/EN/JA/ZHEN：尊重
+        final_lang = req_lang_u
+    kwargs["language"] = final_lang
     if st.get("response_format"):
         data["response_format"] = st["response_format"]
     if isinstance(st.get("speed"), (int, float)):
@@ -610,12 +683,10 @@ async def api_tts_adapter(request: Request):
                 report["emotion"] = {"source": "inline", "action": "text"}
             elif overrides.get("emo_ref"):
                 roots = _load_library()
-                rr = str(overrides["emo_ref"]).split("|", 1)
-                if len(rr) == 2 and 0 <= int(rr[0] or 0) < len(roots):
-                    gp = Path(roots[int(rr[0])]["path"]) / rr[1]
-                    if gp.is_file():
-                        kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
-                        report["emotion"] = {"source": "inline", "action": "audio"}
+                gp, _note = _ref_from_piped(overrides["emo_ref"], roots)
+                if gp is not None:
+                    kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
+                    report["emotion"] = {"source": "inline", "action": "audio"}
             elif instructions:
                 kwargs["use_emo_text"] = True
                 kwargs["emo_text"] = instructions
@@ -690,11 +761,9 @@ async def api_tts_adapter(request: Request):
                 kwargs["emo_text"] = hit.get("text", "")
             else:
                 roots = _load_library()
-                rr = str(hit.get("audio", "")).split("|", 1)
-                if len(rr) == 2 and 0 <= int(rr[0] or 0) < len(roots):
-                    gp = Path(roots[int(rr[0])]["path"]) / rr[1]
-                    if gp.is_file():
-                        kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
+                gp, _note = _ref_from_piped(hit.get("audio"), roots)
+                if gp is not None:
+                    kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
         data["input"] = (text.strip() or str(data.get("input") or "").strip())
         report["residual"] = data["input"]
         _apply_settings_defaults(kwargs, data, text)
@@ -775,11 +844,9 @@ async def api_tts_adapter(request: Request):
                     kwargs["emo_text"] = hit.get("text", "")
                 else:
                     roots = _load_library()
-                    rr = str(hit.get("audio", "")).split("|", 1)
-                    if len(rr) == 2 and 0 <= int(rr[0] or 0) < len(roots):
-                        gp = Path(roots[int(rr[0])]["path"]) / rr[1]
-                        if gp.is_file():
-                            kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
+                    gp, _note = _ref_from_piped(hit.get("audio"), roots)
+                    if gp is not None:
+                        kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
                 report["emotion"] = {"source": "mapping", "action": hit["action"]}
         data["input"] = (text.strip() or str(data.get("input") or "").strip())
         report["residual"] = data["input"]
@@ -980,11 +1047,9 @@ async def api_tts_adapter(request: Request):
                 kwargs["emo_text"] = hit.get("text", "")
             else:
                 roots = _load_library()
-                rr = str(hit.get("audio", "")).split("|", 1)
-                if len(rr) == 2 and 0 <= int(rr[0] or 0) < len(roots):
-                    gp = Path(roots[int(rr[0])]["path"]) / rr[1]
-                    if gp.is_file():
-                        kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
+                gp, _note = _ref_from_piped(hit.get("audio"), roots)
+                if gp is not None:
+                    kwargs["emo_prompt_speech_b64"] = base64.b64encode(gp.read_bytes()).decode("ascii")
     data["input"] = (text.strip() or str(data.get("input") or "").strip())
     report["residual"] = data["input"]
     _apply_settings_defaults(kwargs, data, text)
@@ -1175,11 +1240,13 @@ def api_reflib():
 
 
 @app.get("/api/reflib/file")
-def api_reflib_file(root: int, rel: str):
+def api_reflib_file(root: str, rel: str):
     roots = _load_library()
-    if not 0 <= root < len(roots):
+    # root 接受库名（抗库源重排，前端统一用库名）或旧 int 索引
+    root_info, _note = _resolve_lib_root(roots, root)
+    if root_info is None:
         return JSONResponse({"detail": "非法库源"}, status_code=404)
-    root_path = Path(roots[root]["path"])
+    root_path = Path(root_info["path"])
     if not root_path.is_dir():
         return JSONResponse({"detail": "库源目录不存在"}, status_code=404)
     try:
@@ -1232,9 +1299,10 @@ SETTINGS_PARAM_KEYS = (
 
 
 def detect_language(text):
-    """language=Auto：按 input 主体语言字数判定——纯拉丁→EN、假名≥1/4 CJK→JA、
-    其余（含 CJK 混拉丁、空、纯数字符号）→ ZHEN（中英混合模式兜底，zh 规范化 +
-    接受中英混排，对中文为主的台词最安全，#62）。"""
+    """language=Auto：按 input 主体语言判定——假名(U+3040–U+30FF)仅日文独有，出现即判 JA；
+    纯拉丁→EN；拉丁字母不少于汉字→ZHEN（中英混合兜底）；其余（纯汉字/汉字为主无假名）→ZH。
+    #62 原阈值 kana*4>=cjk 对「汉字为主、假名稀疏」的日文过严（如「日本語の勉強」会误判 ZH），
+    故改为「含任意假名即 JA」；中文/英文文本永不出现假名，不会误判。"""
     t = str(text or "")
     cjk = sum(1 for c in t if '\u4e00' <= c <= '\u9fff' or '\u3040' <= c <= '\u30ff' or '\uac00' <= c <= '\ud7af')
     latin = sum(1 for c in t if c.isascii() and c.isalpha())
@@ -1242,12 +1310,12 @@ def detect_language(text):
         return "EN"
     if cjk > 0:
         kana = sum(1 for c in t if '\u3040' <= c <= '\u30ff')
-        if kana > 0 and kana * 4 >= cjk:
+        if kana > 0:  # 假名仅存在于日文，出现即判定日文（覆盖汉字为主、假名稀疏的日文）
             return "JA"
-        if latin >= cjk:  # 拉丁字母不少于汉字才判中英混合（阈值过低的杂散字母不算）
+        if latin >= cjk:  # 拉丁字母不少于汉字→中英混合
             return "ZHEN"
-        return "ZH"
-    return "ZHEN"
+        return "ZH"  # 纯汉字或汉字为主无假名→中文
+    return "ZHEN"  # 无 CJK 也无拉丁（纯数字/符号/空白）→ 中英混合兜底
 
 
 @app.get("/api/settings")
@@ -1303,6 +1371,10 @@ async def api_ttsform_save(request: Request):
             value[k] = body[k]
     if value.get("emo_mode") not in ("none", "auto", "vector", "text", "audio"):
         value["emo_mode"] = "none"
+    # 库引用迁移：int 索引 → 库名（抗库源重排）
+    for k in ("ref_lib", "emo_audio_lib"):
+        if value.get(k):
+            value[k] = _migrate_piped_ref(value[k])
     _save_config("ttsform", value)
     return value
 
@@ -1310,8 +1382,8 @@ async def api_ttsform_save(request: Request):
 @app.get("/api/adapterform")
 def api_adapterform_get():
     return _load_config("adapterform", {
-        "input": "", "voice": "default", "response_format": "wav",
-        "speed": 1.0, "kwargs": "",
+        "model": "IndexTTS-2.5", "input": "", "instructions": "", "voice": "default",
+        "response_format": "wav", "speed": 1.0, "kwargs": "", "advanced": {},
     })
 
 
@@ -1319,7 +1391,8 @@ def api_adapterform_get():
 async def api_adapterform_save(request: Request):
     body = await request.json()
     value = _load_config("adapterform", {})
-    for k in ("input", "voice", "response_format", "speed", "kwargs"):
+    for k in ("model", "input", "instructions", "voice", "response_format", "speed",
+              "kwargs", "advanced"):
         if k in body:
             value[k] = body[k]
     _save_config("adapterform", value)
@@ -1351,7 +1424,7 @@ async def api_emotions_save(request: Request):
         r["tag"] = str(r.get("tag", "")).strip()
         if r.get("action") not in ("none", "vector", "text", "audio"):
             r["action"] = "none"
-        r["audio"] = str(r.get("audio", "")).strip()  # 引导音频引用 "root|rel"（参考音频库）
+        r["audio"] = _migrate_piped_ref(str(r.get("audio", "")).strip())  # 引导音频引用 "库名|相对路径"
         if r["action"] == "vector" and not isinstance(r.get("vector"), list):
             r["vector"] = [0, 0, 0, 0, 0, 0, 0, 0]
         if r["action"] == "text":

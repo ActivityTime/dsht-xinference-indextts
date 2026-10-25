@@ -50,3 +50,8 @@ config.local.ps1
 
 # 运行时生成物
 STATUS.txt
+*.url
+.monitor.lock
+
+# 迁移前配置回滚点（本机特定，不入库）
+console/_backup_before_rootname_migration/

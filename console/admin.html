@@ -185,7 +185,8 @@ textarea{resize:vertical;min-height:6rem}
         <div class="grid2" style="margin-top:.75rem">
           <label class="f">语言
             <select id="tts-lang">
-              <option value="ZH" selected>中文 (ZH)</option>
+              <option value="Auto" selected>自动检测 (Auto)</option>
+              <option value="ZH">中文 (ZH)</option>
               <option value="EN">英文 (EN)</option>
               <option value="JA">日文 (JA)</option>
               <option value="ZHEN">中英混合 (ZHEN)</option>
@@ -287,6 +288,58 @@ textarea{resize:vertical;min-height:6rem}
             input（纯正文；支持三类内联指令：#[适配模式][..] / #[情感控制][..][..] / #[参数][k=v]..）
             <textarea id="ad-input" placeholder="大家好，欢迎体验……"></textarea>
           </label>
+          <details style="margin-top:.5rem">
+            <summary style="cursor:pointer;font-weight:600;font-size:.875rem">内联指令说明（可写在 input / instructions / voice 任一字段，命中即自动剔除、不朗读）</summary>
+            <div style="font-size:.8125rem;line-height:1.7;margin-top:.5rem;padding:.75rem;background:hsl(var(--muted)/.4);border-radius:var(--radius);overflow-x:auto">
+              <table style="width:100%;border-collapse:collapse;font-size:.8125rem">
+                <thead>
+                  <tr style="text-align:left;color:hsl(var(--muted-foreground));border-bottom:1px solid hsl(var(--border)/.7)">
+                    <th style="padding:.35rem .5rem .35rem 0;white-space:nowrap;font-weight:600">指令</th>
+                    <th style="padding:.35rem .5rem .35rem 0;white-space:nowrap;font-weight:600">作用</th>
+                    <th style="padding:.35rem 0 .35rem .5rem;font-weight:600">示例</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="border-bottom:1px solid hsl(var(--border)/.35);vertical-align:top">
+                    <td style="padding:.4rem .5rem .4rem 0;white-space:nowrap"><code>#[适配模式][模式名]</code></td>
+                    <td style="padding:.4rem .5rem .4rem 0">最高级覆盖适配模式。模式名：<b>文字情感 / 引导音频 / 切换音色 / 情绪向量 / 情绪映射</b>（亦接受 text_emotion / guide_audio / group_switch / vector / emotion_map）</td>
+                    <td style="padding:.4rem 0 .4rem .5rem"><code>#[适配模式][切换音色]</code></td>
+                  </tr>
+                  <tr style="border-bottom:1px solid hsl(var(--border)/.35);vertical-align:top">
+                    <td style="padding:.4rem .5rem .4rem 0;white-space:nowrap"><code>#[情感控制][情绪向量][…]</code></td>
+                    <td style="padding:.4rem .5rem .4rem 0">最高级覆盖情感。8 维依次为 happy, angry, sad, afraid, disgusted, melancholic, surprised, calm</td>
+                    <td style="padding:.4rem 0 .4rem .5rem"><code>#[情感控制][情绪向量][1,0,0,0,0,0,0,0]</code></td>
+                  </tr>
+                  <tr style="border-bottom:1px solid hsl(var(--border)/.35);vertical-align:top">
+                    <td style="padding:.4rem .5rem .4rem 0;white-space:nowrap"><code>#[情感控制][文字描述][文本]</code></td>
+                    <td style="padding:.4rem .5rem .4rem 0">用文字描述指定情感（走 Qwen 文本情感）</td>
+                    <td style="padding:.4rem 0 .4rem .5rem"><code>#[情感控制][文字描述][calm and composed]</code></td>
+                  </tr>
+                  <tr style="border-bottom:1px solid hsl(var(--border)/.35);vertical-align:top">
+                    <td style="padding:.4rem .5rem .4rem 0;white-space:nowrap"><code>#[情感控制][引导音频][库名/相对路径]</code></td>
+                    <td style="padding:.4rem .5rem .4rem 0">用库内音频作情感参考（<b>库名</b>/相对路径，用库名而非序号，库源重排不失效）</td>
+                    <td style="padding:.4rem 0 .4rem .5rem"><code>#[情感控制][引导音频][默认音色库/_ab_indexTTS/clips/甘雨/zh_Ganyu_0003_平静_疑问询问.wav]</code></td>
+                  </tr>
+                  <tr style="border-bottom:1px solid hsl(var(--border)/.35);vertical-align:top">
+                    <td style="padding:.4rem .5rem .4rem 0;white-space:nowrap"><code>#[音色选择][库名/相对路径]</code></td>
+                    <td style="padding:.4rem .5rem .4rem 0">最高级覆盖音色（prompt_speech）</td>
+                    <td style="padding:.4rem 0 .4rem .5rem"><code>#[音色选择][默认音色库/_ab_indexTTS/clips/甘雨/zh_Ganyu_0003_平静_疑问询问.wav]</code></td>
+                  </tr>
+                  <tr style="border-bottom:1px solid hsl(var(--border)/.35);vertical-align:top">
+                    <td style="padding:.4rem .5rem .4rem 0;white-space:nowrap"><code>#[参数][k=v][k=v]…</code></td>
+                    <td style="padding:.4rem .5rem .4rem 0">最高级参数覆盖（可多个 k=v）。speed 落标准字段，其余进 kwargs</td>
+                    <td style="padding:.4rem 0 .4rem .5rem"><code>#[参数][speed=1.2][diffusion_steps=16]</code></td>
+                  </tr>
+                </tbody>
+              </table>
+              <div style="color:hsl(var(--muted-foreground));margin-top:.6rem;padding-top:.5rem;border-top:1px solid hsl(var(--border)/.5);line-height:1.6">
+                <div>· <b>优先级</b>：内联 <code>#[..]</code> ＞ 调用方显式 kwargs ＞ 模式默认行为。</div>
+                <div>· <b>生效规则</b>：同一类指令出现多次时<b>首个生效</b>；不同类可同时使用，按 <b>适配模式 → 情感控制 → 音色选择 → 参数</b> 顺序应用。</div>
+                <div>· <b>剔除</b>：命中的指令从字段中移除，<b>不会被朗读</b>；未识别的 <code>#[..][..]</code> 原样保留。</div>
+                <div>· <b>获取路径</b>：在「参考音频库」条目上点「复制音色指令」/「复制情感指令」可直接得到上面两种路径格式。</div>
+              </div>
+            </div>
+          </details>
           <div class="grid2" style="margin-top:.75rem">
             <label class="f" title="DSHT 兼容：模型名含 gpt-4o 才发情绪指令；适配层忽略此值统一路由本机模型。另支持模式关键词子串（覆盖默认行为）：文字情感 / 引导音频 / 切换音色 / 情绪向量（或 text_emotion / guide_audio / group_switch / vector），如 gpt-4o-切换音色">
               model（可携带模式关键词，如 gpt-4o-切换音色；适配层路由到本机模型）
@@ -367,7 +420,7 @@ textarea{resize:vertical;min-height:6rem}
         <div class="row" style="margin-bottom:.75rem">
           <input type="text" id="reflib-search" placeholder="搜索名称/分组…" style="max-width:18rem" oninput="renderRefLib()">
           <button class="btn btn-secondary" onclick="loadRefLib()">刷新</button>
-          <span style="font-size:.75rem;color:hsl(var(--muted-foreground))">▶ 试听；「用作参考」回填合成页。</span>
+          <span style="font-size:.75rem;color:hsl(var(--muted-foreground))">▶ 试听；「复制名」复制完整引用名（库名|相对路径）；「复制音色指令 / 复制情感指令」复制可直接贴进正文的内联指令；「用作参考」回填合成页。</span>
         </div>
         <div class="reflist" id="reflib-list">加载中…</div>
       </div>
@@ -477,7 +530,7 @@ textarea{resize:vertical;min-height:6rem}
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s ?? "").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 function fmtBytes(b) { return b > 1048576 ? (b/1048576).toFixed(1) + " MB" : (b/1024).toFixed(0) + " KB"; }
 
 /* ── 主题 ── */
@@ -523,8 +576,92 @@ function setPill(id, textId, cls, text) {
 
 /* ── 音频库（全局缓存 + 搜索 + 播种选择器） ── */
 let refItems = [];
-function libValue(it) { return it.root + "|" + it.rel; }
+/* 库条目引用值 = 「库名|相对路径」（库名优先，抗库源重排；服务端 _resolve_lib_root 亦兼容旧 int 索引）。
+   🔴 禁止用 int 索引做外部引用：库源一增删/重排，全部映射与配置集体错位。
+   兼容两种来源：库扫描条目带 rootName（库名）；已存配置项可能是旧 {root:int, rel}，
+   此时用 root_name（服务端保存时已迁移）或退回索引（旧数据，待保存后自动迁移）。 */
+function libRootName(it) {
+  if (it.rootName != null && it.rootName !== "") return String(it.rootName);
+  if (it.root_name) return String(it.root_name);
+  return String(it.root ?? 0);   // 旧 int 索引格式（仅作最后回退）
+}
+function libValue(it) { return libRootName(it) + "|" + it.rel; }
+/* 比对两条「库引用|相对路径」是否指向同一文件：库引用部分按名或按索引等价即算同一条。
+   用途：旧配置里存的是 int 索引（如 "0|xxx.wav"），下拉框仍能选中对应库条目。 */
+function pipedRefMatches(a, b) {
+  if (!a || !b) return false;
+  const pa = String(a).split("|"), pb = String(b).split("|");
+  if (pa.length !== 2 || pb.length !== 2) return false;
+  if (pa[1] !== pb[1]) return false;             // 相对路径必须一致
+  const ra = pa[0].trim(), rb = pb[0].trim();
+  if (ra === rb) return true;
+  const ia = Number(ra), ib = Number(rb);
+  return Number.isInteger(ia) && Number.isInteger(ib) && ia === ib;
+}
 function libLabel(it) { return it.group + " / " + it.name; }
+/* 复制：优先 navigator.clipboard，失败/不可用回退隐藏 textarea + execCommand */
+function fallbackCopy(text, cb) {
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); if (ok) cb && cb(); }
+  catch (e) { toast("复制失败: " + e, true); }
+  if (!ok) toast("复制失败：浏览器拒绝了剪贴板写入", true);
+  document.body.removeChild(ta);
+}/* 复制：乐观反馈——点击立即提示（剪贴板写入在后台完成）。
+   navigator.clipboard.writeText 在部分环境（自动化浏览器 / 非安全上下文 / 权限弹窗）
+   promise 会延迟或挂起，等它 resolve 才提示会让用户以为"没反应"。
+   注：成功提示只弹一次；回退路径不重复提示，仅失败时告警。 */
+function copyToClipboard(text, okMsg) {
+  toast(okMsg);
+  const fail = (e) => {
+    console.warn("clipboard.writeText 失败，回退 execCommand:", e);
+    fallbackCopy(text, () => {});
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      const p = navigator.clipboard.writeText(text);
+      if (p && typeof p.catch === "function") p.catch(fail);
+      else if (p && typeof p.then === "function") p.then(() => {}, fail);
+    } catch (e) { fail(e); }
+  } else { fallbackCopy(text, () => {}); }
+}
+/* 库条目复制（事件委托，避免把路径拼进 onclick 字符串导致引号注入）：
+   - 复制名   → 「索引|相对路径」：贴到 voice / 引导音频配置框
+   - 复制音色指令 → #[音色选择][库名/相对路径]：正文内联，覆盖 prompt_speech
+   - 复制情感指令 → #[情感控制][引导音频][库名/相对路径]：正文内联，注入 emo_prompt_speech_b64
+   注：内联指令用「库名」而非索引，抗库源重排（服务端 _resolve_lib_root 优先按名匹配）。 */
+/* 复制反馈：① toast（右下角）② 按钮内联文字（更可靠，fixed 定位的 toast 在某些环境不显）
+   ② 保证用户一定看得到"复制成功"的信号。 */
+function flashCopied(btn, label) {
+  if (!btn) return;
+  const old = btn.textContent;
+  btn.textContent = "✓ 已复制";
+  btn.disabled = true;
+  setTimeout(() => { btn.textContent = old; btn.disabled = false; }, 2500);
+}
+function handleCopyClick(ev) {
+  const btn = ev.target.closest("[data-copy]");
+  if (!btn) return;
+  const rel = btn.dataset.rel || "";
+  const kind = btn.dataset.copy;
+  if (kind === "ref") {
+    const full = (btn.dataset.rootname || "") + "|" + rel;
+    copyToClipboard(full, "已复制完整名: " + full);
+    flashCopied(btn);
+  } else if (kind === "voice") {
+    copyToClipboard("#[音色选择][" + (btn.dataset.rootname || "") + "/" + rel + "]",
+                    "已复制内联指令（音色选择）");
+    flashCopied(btn);
+  } else if (kind === "emo") {
+    copyToClipboard("#[情感控制][引导音频][" + (btn.dataset.rootname || "") + "/" + rel + "]",
+                    "已复制内联指令（引导音频）");
+    flashCopied(btn);
+  } else if (kind === "use") {
+    useRef(btn.dataset.rootname || "", rel);
+  }
+}
 async function loadRefLib() {
   try {
     const data = await (await fetch("/api/reflib")).json();
@@ -548,10 +685,13 @@ function renderRefLib() {
   list.innerHTML = Object.entries(byGroup).map(([g, arr]) =>
     `<div class="refgroup"><div class="gname">${esc(g)}</div>` +
     arr.map((it) => `<div class="refitem">
-      <audio src="/api/reflib/file?root=${it.root}&rel=${encodeURIComponent(it.rel)}" preload="none" controls></audio>
+      <audio src="/api/reflib/file?root=${encodeURIComponent(it.rootName ?? "")}&rel=${encodeURIComponent(it.rel)}" preload="none" controls></audio>
       <span class="name" title="${esc(it.rel)}">${esc(it.name)}</span>
       <span class="size">${it.size_kb} KB</span>
-      <button class="btn btn-secondary btn-sm" onclick='useRef(${it.root},"${it.rel.replace(/\\/g, "\\\\")}")'>用作参考</button>
+      <button class="btn btn-secondary btn-sm" data-copy="ref" data-rootname="${esc(it.rootName ?? "")}" data-rel="${esc(it.rel)}" title="复制完整引用名 库名|相对路径（可贴到 voice / 引导音频配置；用库名而非序号，库源重排不会失效）">复制名</button>
+      <button class="btn btn-secondary btn-sm" data-copy="voice" data-rootname="${esc(it.rootName ?? "")}" data-rel="${esc(it.rel)}" title="复制内联指令 #[音色选择][库名/相对路径]（贴到正文即用此音频作音色）">复制音色指令</button>
+      <button class="btn btn-secondary btn-sm" data-copy="emo" data-rootname="${esc(it.rootName ?? "")}" data-rel="${esc(it.rel)}" title="复制内联指令 #[情感控制][引导音频][库名/相对路径]（贴到正文即用此音频作情感参考）">复制情感指令</button>
+      <button class="btn btn-secondary btn-sm" data-copy="use" data-rootname="${esc(it.rootName ?? "")}" data-rel="${esc(it.rel)}">用作参考</button>
     </div>`).join("") + "</div>").join("");
 }
 function ensureOption(selId, value) {
@@ -563,10 +703,10 @@ function ensureOption(selId, value) {
     `<option value="${esc(value)}">${esc(it ? libLabel(it) : value)}</option>`);
   sel.value = value;
 }
-function useRef(root, rel) {
+function useRef(rootName, rel) {
   $("ref-mode").value = "lib"; renderRefMode();
   $("tts-ref-filter").value = ""; renderTtsRefOptions();
-  ensureOption("tts-ref", root + "|" + rel);
+  ensureOption("tts-ref", rootName + "|" + rel);
   updateRefPreview();
   document.querySelector('.nav-item[data-page="tts"]').click();
   toast("已选为参考音频：" + rel);
@@ -706,7 +846,7 @@ function updateRefPreview() {
   }
   if (!v) { player.style.display = "none"; player.removeAttribute("src"); return; }
   const [root, rel] = v.split("|");
-  player.src = `/api/reflib/file?root=${root}&rel=${encodeURIComponent(rel)}`;
+  player.src = `/api/reflib/file?root=${encodeURIComponent(root)}&rel=${encodeURIComponent(rel)}`;
   player.style.display = "";
 }
 function renderRefMode() {
@@ -717,13 +857,13 @@ function renderRefMode() {
   updateRefPreview();
 }
 function renderGroupMembers() {
-  const g = groups.find((x) => x.name === $("tts-group").value);
+  const g = (groups.groups ?? []).find((x) => x.name === $("tts-group").value);
   const sel = $("tts-group-member");
   if (!g) { sel.innerHTML = '<option value="">— 选择分组 —</option>'; updateRefPreview(); return; }
   const def = (g.members ?? []).find((m) => m.is_default) ?? (g.members ?? [])[0];
   sel.innerHTML = '<option value="">— 选择 —</option>' +
     (g.members ?? []).map((m) =>
-      `<option value="${m.root}|${esc(m.rel)}" ${def && m === def ? "selected" : ""}>${esc(m.label)}${m.is_default ? "（默认）" : ""}</option>`).join("");
+      `<option value="${esc(libValue(m))}" ${def && m === def ? "selected" : ""}>${esc(m.label)}${m.is_default ? "（默认）" : ""}</option>`).join("");
   updateRefPreview();
 }
 
@@ -836,7 +976,7 @@ function renderEmappings() {
           <input type="text" value="${esc(it.label ?? "")}" data-e="${i}" data-j="${j}" data-k="label" placeholder="情绪标签（触发词）" style="max-width:10rem">
           <select data-e="${i}" data-j="${j}" data-k="audio">
             <option value="">— 选择库音频 —</option>
-            ${refItems.slice(0, 400).map((r) => `<option value="${esc(libValue(r))}" ${libValue(r) === `${it.root}|${it.rel}` ? "selected" : ""}>${esc(libLabel(r))}</option>`).join("")}
+            ${refItems.slice(0, 400).map((r) => `<option value="${esc(libValue(r))}" ${libValue(r) === libValue(it) || pipedRefMatches(libValue(r), libValue(it)) ? "selected" : ""}>${esc(libLabel(r))}</option>`).join("")}
           </select>
           <label class="f" style="flex-direction:row;align-items:center;gap:.375rem" title="命中时该音频同时替换 prompt_speech（默认成员）">
             <input type="checkbox" data-e="${i}" data-j="${j}" data-k="replace_default" style="width:auto" ${it.replace_default ? "checked" : ""}> 替换默认音色
@@ -906,7 +1046,11 @@ function wireEmappingInputs() {
       }
       const it = e.items[+j], k = inp.dataset.k;
       if (k === "label") it.label = inp.value.trim();
-      else if (k === "audio") { const [root, rel] = inp.value.split("|"); it.root = +root || 0; it.rel = rel ?? ""; }
+      else if (k === "audio") {
+        const [rootName, rel] = inp.value.split("|");
+        it.root_name = rootName ?? ""; it.rel = rel ?? "";
+        delete it.root;   // 禁止保留 int 索引（库源重排即失效）
+      }
       else if (k === "replace_default") it.replace_default = inp.checked;
       else if (k === "triggers") it.triggers = inp.value.split(/[,，]/).map((x) => x.trim()).filter(Boolean);
       else if (k === "vector") { try { it.vector = JSON.parse(inp.value); } catch { toast("向量不是合法 JSON", true); } }
@@ -922,7 +1066,7 @@ function addEmapping() {
 }
 function delEmapping(i) { emappings.entries.splice(i, 1); renderEmappings(); }
 function addEItem(i, type) {
-  const base = type === "audio" ? { type, label: "", root: 0, rel: "", replace_default: false }
+  const base = type === "audio" ? { type, label: "", root_name: "", rel: "", replace_default: false }
     : type === "vector" ? { type, triggers: [], vector: [0, 0, 0, 0, 0, 0, 0, 0] }
     : { type, triggers: [], text: "" };
   emappings.entries[i].items.push(base);
@@ -942,9 +1086,10 @@ function importGroupMembers(i) {
   if (!g) { toast("请先绑定音色分组", true); return; }
   let added = 0;
   for (const m of g.members ?? []) {
-    const key = `${m.root}|${m.rel}`;
-    if (e.items.some((it) => it.type === "audio" && `${it.root}|${it.rel}` === key && it.label === m.label)) continue;
-    e.items.push({ type: "audio", label: m.label ?? "", root: m.root ?? 0, rel: m.rel ?? "", replace_default: false });
+    const key = libValue(m);
+    if (e.items.some((it) => it.type === "audio" && libValue(it) === key && it.label === m.label)) continue;
+    const item = { type: "audio", label: m.label ?? "", root_name: libRootName(m), rel: m.rel ?? "", replace_default: false };
+    e.items.push(item);
     added++;
   }
   renderEmappings();
@@ -999,10 +1144,10 @@ function renderEmoRules() {
         </select>
       </label>
       ${r.action === "audio"
-        ? `<label class="f" style="width:20rem" title="库引用格式 root|rel；可先在参考音频库页搜索后复制">引导音频（库引用 root|rel）
+        ? `<label class="f" style="width:20rem" title="库引用格式：库名|相对路径（用库名而非序号，库源重排不会失效）；可先在参考音频库页点「复制名」获取">引导音频（库引用 库名|相对路径）
             <select data-i="${i}" data-k="audio">
               <option value="">— 选择库音频 —</option>
-              ${refItems.map((it) => `<option value="${esc(libValue(it))}" ${libValue(it) === (r.audio ?? "") ? "selected" : ""}>${esc(libLabel(it))}</option>`).join("")}
+              ${refItems.map((it) => `<option value="${esc(libValue(it))}" ${libValue(it) === (r.audio ?? "") || pipedRefMatches(libValue(it), r.audio) ? "selected" : ""}>${esc(libLabel(it))}</option>`).join("")}
             </select>
           </label>`
         : `<label class="f" style="width:16rem" data-show="${i}">${r.action === "vector" ? "向量" : "情感描述"}
@@ -1204,7 +1349,7 @@ async function saveDefaults() {
 /* ── API 配置页参数清单（与 server SETTINGS_PARAM_KEYS 同步；空白=上游默认）── */
 const API_PARAMS = {
   openai: [
-    ["lang", "语言", "select", "Auto", "Auto（按 input 主体语言字数检测：纯拉丁→EN、假名≥1/4→JA、其余→ZHEN 兜底）/ ZH / EN / JA / ZHEN（中英混合，zh 规范化+接受混排）"],
+    ["lang", "语言", "select", "Auto", "Auto（按 input 检测：含假名→JA、纯拉丁→EN、拉丁≥汉字→ZHEN 中英混合、其余→ZH）/ ZH / EN / JA / ZHEN（中英混合，zh 规范化+接受混排，模型映射为 common 多语种 token；假名仅日文独有，出现即判 JA）"],
     ["speed", "语速 speed", "number", "1.0", "OpenAI 标准 0.25–4.0；默认 1.0。IndexTTS 映射为 duration_factor=1/speed"],
     ["response_format", "输出格式", "select", "wav", "wav / mp3 / flac / ogg（上游 soundfile 编码；OpenAI 的 opus/aac/pcm 不适用）"],
     ["emo_alpha", "情感强度 emo_alpha", "number", "1.0", "0–1，默认 1.0=全强度。官方文档定义范围 0.0–1.0；引导音频来自他人时泄漏明显建议 0.5 以下；与参考音频同源时强制 1.0（模型行为），调低无意义"],
@@ -1268,13 +1413,18 @@ function renderModeDesc() {
 }
 
 /* ── API 配置页参数卡（空白=默认；两块：OpenAI 通用 / IndexTTS） ── */
+/* 每个 select 参数各自的选项与默认值（此前所有 select 硬编码 langOpts，导致输出格式下拉错成语言项）*/
+const API_SELECT_OPTS = {
+  lang: ["Auto", "ZH", "EN", "JA", "ZHEN"],
+  response_format: ["wav", "mp3", "flac", "ogg"],
+};
+const API_SELECT_DEFAULT = { lang: "Auto", response_format: "wav" };
 function renderApiParams() {
-  const langOpts = ["Auto", "ZH", "EN", "JA", "ZHEN"];
   for (const [box, defs] of [["apiparam-openai", API_PARAMS.openai], ["apiparam-indextts", API_PARAMS.indextts]]) {
     $(box).innerHTML = defs.map(([k, label, type, ph, hint]) => {
       const t = type === "checkbox" || type === "checkbox-on" || type === "select";
       const ctrl = type === "select"
-        ? `<select data-apip="${k}" data-t="select">${langOpts.map((o) => `<option value="${o}">${o}</option>`).join("")}</select>`
+        ? `<select data-apip="${k}" data-t="select">${(API_SELECT_OPTS[k] || []).map((o) => `<option value="${o}">${o}</option>`).join("")}</select>`
         : t
           ? `<input type="checkbox" data-apip="${k}" data-t="${type}" style="width:auto" ${type === "checkbox-on" ? "checked" : ""}>`
           : `<input type="number" data-apip="${k}" data-t="number" placeholder="${ph}">`;
@@ -1302,7 +1452,7 @@ function renderApiParamValues(values) {
     if (v === undefined || v === null || v === "") {
       if (t === "checkbox") inp.checked = false;
       else if (t === "checkbox-on") inp.checked = true;
-      else if (t === "select") inp.value = "Auto";
+      else if (t === "select") inp.value = API_SELECT_DEFAULT[k] ?? "";
       else inp.value = "";
       return;
     }
@@ -1329,7 +1479,7 @@ async function applyDefaultsToForm() {
   let s;
   try { s = await (await fetch("/api/ttsform")).json(); } catch { return; }
   if (s.input !== undefined) $("tts-text").value = s.input;
-  $("tts-lang").value = s.lang ?? "ZH";
+  $("tts-lang").value = s.lang ?? "Auto";
   $("tts-speed").value = s.speed ?? 1.0;
   $("tts-fmt").value = s.response_format ?? "wav";
   $("emo-alpha").value = s.emo_alpha ?? 1.0;
@@ -1402,6 +1552,8 @@ function renderPageMode() {
   $("mode-hint").textContent = adapter
     ? "发起标准 API 请求（POST /v1/audio/speech）；服务端适配层剥指令壳、查情绪映射、voice 逗号组合、按默认模式联动分组/情感——与真实 API 调用行为一致。"
     : "手动选参考音频与情感，所见即所得。";
+  // 切到适配页时若尚未成功套用过默认（如 init 时框隐藏/取数失败），补加载一次
+  if (adapter && !_adapterDefaultsApplied) applyAdapterDefaults();
 }
 
 /* ── 直接配置合成（IndexTTS-2.5 原生，无任何文本解析） ── */
@@ -1434,7 +1586,7 @@ async function doTtsDirect() {
     if (emoFile) { emoBytes = await emoFile.arrayBuffer(); emoName = emoFile.name; }
     else if ($("emo-audio-lib").value) {
       const [er, erel] = $("emo-audio-lib").value.split("|");
-      const blob = await (await fetch(`/api/reflib/file?root=${er}&rel=${encodeURIComponent(erel)}`)).blob();
+      const blob = await (await fetch(`/api/reflib/file?root=${encodeURIComponent(er)}&rel=${encodeURIComponent(erel)}`)).blob();
       emoBytes = await blob.arrayBuffer(); emoName = erel;
     } else { toast("音频引导模式请选择情感参考音频", true); return; }
     kwargs.emo_prompt_speech_b64 = btoa(String.fromCharCode(...new Uint8Array(emoBytes)));
@@ -1451,7 +1603,7 @@ async function doTtsDirect() {
     if (refMode === "upload") form.append("prompt_speech", $("tts-ref-file").files[0], $("tts-ref-file").files[0].name);
     else {
       const [root, rel] = refValue.split("|");
-      const blob = await (await fetch(`/api/reflib/file?root=${root}&rel=${encodeURIComponent(rel)}`)).blob();
+      const blob = await (await fetch(`/api/reflib/file?root=${encodeURIComponent(root)}&rel=${encodeURIComponent(rel)}`)).blob();
       form.append("prompt_speech", blob, rel);
     }
   } catch { toast("参考音频读取失败", true); return; }
@@ -1491,6 +1643,7 @@ async function doTtsDirect() {
 }
 
 /* ── 适配页默认填写状态（独立于直接模式的 ttsform） ── */
+let _adapterDefaultsApplied = false;
 async function applyAdapterDefaults() {
   try {
     const s = await (await fetch("/api/adapterform")).json();
@@ -1502,7 +1655,8 @@ async function applyAdapterDefaults() {
     $("ad-speed").value = s.speed ?? 1.0;
     $("ad-kwargs").value = s.kwargs ?? "";
     renderAdvancedValues("adv-adapter", s.advanced);
-  } catch { /* 首次无配置用页面默认 */ }
+    _adapterDefaultsApplied = true;  // 仅成功套用后才置旗，失败则留给切页时重试
+  } catch (e) { console.error("applyAdapterDefaults 失败:", e); }
 }
 async function saveAdapterDefault() {
   const body = {
@@ -1525,10 +1679,11 @@ async function doAdapter() {
   if (!text) { toast("请填写 input", true); return; }
   const kwargsRaw = $("ad-kwargs").value.trim();
   if (kwargsRaw) { try { JSON.parse(kwargsRaw); } catch { toast("kwargs 不是合法 JSON", true); return; } }
-  // 高级参数合并进 kwargs（kwargs 文本框的显式值优先）
+  // 高级参数合并进 kwargs（kwargs 文本框的显式值优先）；language 缺省用 Auto 触发服务端按文本检测
+  // （此前硬编码 ?? "ZH" 会令日文等非中文文本走中文 G2P，正是"日文被当中文"的适配页根因）
   let merged = {};
   try { merged = kwargsRaw ? JSON.parse(kwargsRaw) : {}; } catch { toast("kwargs 不是合法 JSON", true); return; }
-  const kwargsFinal = JSON.stringify({ ...collectAdvanced("adv-adapter"), ...merged, language: merged.language ?? "ZH" });
+  const kwargsFinal = JSON.stringify({ ...collectAdvanced("adv-adapter"), ...merged, language: merged.language ?? "Auto" });
   const form = new FormData();
   form.append("model", $("ad-model").value.trim() || "IndexTTS-2.5");
   form.append("input", text);
@@ -1582,16 +1737,24 @@ async function doAdapter() {
 
 /* ── 启动 ── */
 async function init() {
-  await loadRefLib();
-  loadLibrary();
-  await loadEmotions();
-  await loadGroups();
-  refreshAll();
-  renderAdvanced("adv-direct");
-  renderAdvanced("adv-adapter");
-  renderApiParams();
-  await applyDefaultsToForm();
-  applyAdapterDefaults();
+  // 库条目复制：事件委托到容器（列表内容重渲染后依然有效）
+  // ⚠️ 必须最先绑定：后续任何一步抛错都不能影响复制功能
+  $("reflib-list").addEventListener("click", handleCopyClick);
+  try {
+    await loadRefLib();
+    loadLibrary();
+    await loadEmotions();
+    await loadGroups();
+    refreshAll();
+    renderAdvanced("adv-direct");
+    renderAdvanced("adv-adapter");
+    renderApiParams();
+    await applyDefaultsToForm();
+    applyAdapterDefaults();
+  } catch (e) {
+    console.error("init 失败:", e);
+    toast("控制台初始化部分失败：" + e, true);
+  }
   setInterval(refreshAll, 15000);
 }
 init();

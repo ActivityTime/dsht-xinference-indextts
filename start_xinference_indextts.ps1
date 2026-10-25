@@ -89,8 +89,27 @@ function Sync-Maintained {
 Sync-Maintained
 
 # ---------- 1) 启动服务(若未运行) ----------
+# 启动前先"数数"：已有 xinference-local 进程、或 9997 已被监听(含正在启动中) => 绝不重复起，转等待就绪。
+# （此前只判 Test-Health，启动那 60-90s /status 未起，再跑一次启动脚本会多拉一个 xinf → 多实例根源）
+$existingXinf = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.CommandLine -and $_.CommandLine -match 'xinference-local' -and $_.ProcessId -ne $PID
+}
+$portInUse = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
 if (Test-Health) {
     Write-Host '[*] 服务已在运行: ' $endpoint
+} elseif ($existingXinf -or $portInUse) {
+    $pids = ($existingXinf | ForEach-Object { $_.ProcessId }) -join ','
+    Write-Host ("[*] 检测到 xinference 已在运行/启动中 (PID=$pids; 9997监听=$(!!$portInUse))，不重复启动，转等待就绪 ...")
+    $ok = $false
+    for ($i = 0; $i -lt 120; $i++) {
+        Start-Sleep -Seconds 2
+        if (Test-Health) { $ok = $true; break }
+    }
+    if (-not $ok) {
+        Write-Host '[!] 等待服务就绪超时。'
+        exit 1
+    }
+    Write-Host '[OK] 服务就绪: ' $endpoint
 } else {
     Write-Host '[*] 启动 Xinference 服务 (首次约 60-90s, 请稍候) ...'
     Start-Process -FilePath $xinLocal -ArgumentList '--host',$webHost,'--port',$port -WindowStyle Normal
@@ -158,3 +177,21 @@ if ($monRunning) {
     Start-Process -FilePath (Join-Path $venvDir 'Scripts\python.exe') -ArgumentList $monitorPy,'--interval','20' -WindowStyle Hidden
     Write-Host '[*] 守护监控已后台启动 (日志见 logs\monitor.log)'
 }
+
+# ---------- 5) 创建 URL 快捷方式（项目根目录，分别对应实际服务页面）----------
+# 幂等：每次启动重建（已存在则覆盖）。.url 为 Windows InternetShortcut，
+# 内容须 ASCII，故用 [IO.File]::WriteAllText + ASCII 编码，避免 BOM/UTF-16 乱码。
+function New-UrlShortcut {
+    param(
+        [string]$Name,   # 显示名（不含扩展名）
+        [string]$Url
+    )
+    $uPath = Join-Path $PSScriptRoot ($Name + '.url')
+    $uBody = "[InternetShortcut]`r`nURL=$Url`r`n"
+    [IO.File]::WriteAllText($uPath, $uBody, [System.Text.Encoding]::ASCII)
+    Write-Host ('[OK] 已创建快捷方式: ' + $Name + '.url  ->  ' + $Url)
+}
+# 三路实际页面：控制台(9998) / 独立状态页(9996, monitor 默认端口) / Xinference 服务(9997)
+New-UrlShortcut -Name '语音服务控制台' -Url ($Script:ConsoleUrl + '/')
+New-UrlShortcut -Name '语音服务状态页' -Url ('http://' + $Script:WebHost + ':9996/status')
+New-UrlShortcut -Name 'Xinference服务' -Url ($Script:Endpoint + '/')

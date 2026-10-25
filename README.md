@@ -64,7 +64,34 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\start_xinference_indextts.ps1
 
 > 内置 WebUI 已拆除（与 IndexTTS-2.5 运行无关，问题记录 #32）：9997 根路径 JSON 404，服务纯 API 化。IndexTTS2（旧版）回退已移除（#19），仅支持 IndexTTS-2.5。
 
-启动脚本会：恢复自维护包（指纹一致跳过）→ 健康探测（`/status`）→ 未运行则启动 `xinference-local`（等待最多 4 分钟）→ 加载 IndexTTS-2.5（bf16；功能开关 `USE_QWEN_EMO`/`QWEN_DEVICE` 见 `config.ps1`——文字情感默认关闭、首次请求惰性唤醒）→ 拉起 Web 控制台（9998）→ 守护监控。
+启动脚本会：恢复自维护包（指纹一致跳过）→ 健康探测（`/status`）→ 未运行则启动 `xinference-local`（等待最多 4 分钟）→ 加载 IndexTTS-2.5（bf16；功能开关 `USE_QWEN_EMO`/`QWEN_DEVICE` 见 `config.ps1`——文字情感默认关闭、首次请求惰性唤醒）→ 拉起 Web 控制台（9998）→ 守护监控 → 生成页面快捷方式。
+
+### 中文操作入口（推荐日常用）
+
+项目根目录四个中文 `.cmd`（纯说明壳，复用原脚本；echo 用英文，任何代码页都不乱码）：
+
+| 文件 | 作用 |
+|---|---|
+| `启动语音服务.cmd` | 起整套（服务 + 模型 + 控制台 + 监控 + 快捷方式） |
+| `启动监控.cmd` | 只补守护监控（栈在跑但监控掉了时用；先查 9996，已在跑就跳过，不会多开） |
+| `关闭语音服务.cmd` | 关停全家桶（连根拔起 + 循环杀到零 + 清孤儿 + 终检报「关停彻底」） |
+| `查看监控.cmd` | 弹桌面状态窗口（红/绿指示灯 + 「停止」按钮） |
+
+页面快捷方式（start 时自动生成，双击即开）：`语音服务控制台.url`（9998）、`语音服务状态页.url`（**9996，独立于控制台**——控制台死了也能看）、`Xinference服务.url`（9997）。
+
+**不开机自启**（桌面机不是服务器，用不用全看手动双击）。
+
+### 参考音频引用格式（🔴 硬规范）
+
+配置框用 `库名|相对路径`，正文内联指令用 `库名/相对路径`——**一律用库名，禁止用序号**（序号是库源排列位置，增删/重排即全体错位且静默失效）。控制台「参考音频库」每条目旁四个按钮：「复制名」「复制音色指令」「复制情感指令」「用作参考」。详见 `说明文档/05-外部引用与配置.md` 第六节。
+
+### 发布前回归
+
+```powershell
+downloads\venv-main\Scripts\python.exe scripts\selftest.py
+```
+
+18 项（编译 / 引用格式 / 内联指令 / 三端口存活 / 前端语法 / 复制逻辑）。
 
 ---
 
@@ -97,10 +124,12 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\start_xinference_indextts.ps1
 ```
 <部署根>\                                # 自维护区（git → GitHub: ActivityTime/dsht-xinference-indextts）
 ├─ start_xinference_indextts.ps1/.bat    # 一键启动（9999 互斥锁 + 守护监控 + Web 控制台）
+├─ 启动语音服务.cmd / 启动监控.cmd       # 中文操作入口（纯说明壳，复用上面的脚本）
+├─ 关闭语音服务.cmd / 查看监控.cmd       #   （关停全家桶 / 桌面状态窗口）
 ├─ rebuild_downloads.ps1                 # 一键重建下载区（权重 HF + torch cu128 + pip 依赖）
 ├─ config.ps1                            # 中央配置（路径相对定位、功能开关；自动加载 ↓）
 ├─ config.local.ps1                      # 本机专属配置（git 忽略；参考音频库路径等）
-├─ console\                              # Web 控制台（自包含；#32–#56）
+├─ console\                              # Web 控制台（自包含；#32–#72）
 │  ├─ admin.html                         #   页面（状态/合成×2模式/音色库/情绪映射/音色分组/向量映射/API配置/历史）
 │  ├─ server.py                          #   后端（9998；/v1/audio/speech 适配层 + 管理 API + 归档/缓存/日志）
 │  └─ library.json / *_defaults.json 等  #   运行时配置与产物（git 忽略）
@@ -110,7 +139,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\start_xinference_indextts.ps1
 │  ├─ requirements-venv-main.txt         # 主 venv 依赖清单（重建依据；含控制台的 fastapi/uvicorn/requests）
 │  └─ requirements-venv-v4.txt           # v4 模型环境依赖清单
 ├─ scripts\                              # install.ps1 / launch_indextts.py / monitor_indextts.py / tts_test.py / acl_fix.ps1
-├─ 说明文档\（01–09） 问题记录\           # 文档与排障史（56 条；09 为控制台/适配层权威语义）
+│                                        #   + selftest.py（回归 18 项）/ test_copy_logic.js / migrate_refs_to_rootname.py
+├─ 说明文档\（01–09） 问题记录\           # 文档与排障史（72 条；09 为控制台/适配层权威语义）
 ├─ venv\            → junction → downloads\venv-main
 └─ downloads\                           # 可下载区（git 忽略；rebuild 一键重建：权重/两 venv/torch wheel）
 ```
@@ -136,7 +166,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\start_xinference_indextts.ps1
 | 健康探测 | `/status`（`/health` 404）；**模型列表在 `/v1/models`**（#55） | 4.x 行为 |
 | 模型精度 | `use_bf16=true` | 权重全精度加载时 cast bf16（10GB 显存更稳） |
 
-## 已知的坑（详见 问题记录/问题记录.md，56 条）
+## 已知的坑（详见 问题记录/问题记录.md，72 条）
 
 1. **torch 导入 WinError 5**：System32 MSVC/OpenMP ACL 损坏 → `acl_fix.ps1`。
 2. **默认 CPU torch**：`install.ps1` 自动换装 cu128（torch 2.11.0+cu128）。
