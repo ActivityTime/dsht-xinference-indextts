@@ -6,6 +6,9 @@
 > 本仓库只含**自维护部分**（脚本/文档/自维护 Xinference 包/控制台）；venv、wheel、权重、本机配置均可一键重建（见「一键复原」）。
 
 ---
+<img width="1200" height="934" alt="image" src="https://github.com/user-attachments/assets/1c8ab483-c6d0-45a8-a72b-d8052114678f" /> <img width="1195" height="921" alt="image" src="https://github.com/user-attachments/assets/30793602-a370-4a13-9b9d-c2b87758899f" />
+
+
 
 ## 项目特点
 
