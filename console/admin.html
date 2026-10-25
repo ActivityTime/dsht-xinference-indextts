@@ -820,6 +820,11 @@ function renderEmappings() {
     return;
   }
   list.innerHTML = emappings.entries.map((e, i) => {
+    const itemParams = (j, it) => `
+      <details class="memitem" style="padding-left:2.5rem">
+        <summary style="cursor:pointer;font-size:.75rem;color:hsl(var(--muted-foreground))">参数覆盖 JSON（本子条目命中时应用）</summary>
+        <textarea data-e="${i}" data-j="${j}" data-k="params_json" placeholder='{"emo_alpha":0.6,"diffusion_steps":12}' style="min-height:3rem;font-size:.75rem">${esc(it.params_json ?? "")}</textarea>
+      </details>`;
     const items = (e.items ?? []).map((it, j) => {
       const move = `<button class="btn btn-secondary btn-sm" onclick="moveEItem(${i},${j},-1)" ${j === 0 ? "disabled" : ""}>↑</button>
           <button class="btn btn-secondary btn-sm" onclick="moveEItem(${i},${j},1)" ${j === (e.items.length - 1) ? "disabled" : ""}>↓</button>`;
@@ -834,7 +839,7 @@ function renderEmappings() {
             <input type="checkbox" data-e="${i}" data-j="${j}" data-k="replace_default" style="width:auto" ${it.replace_default ? "checked" : ""}> 替换默认音色
           </label>
           <button class="btn btn-danger btn-sm" onclick="delEItem(${i},${j})">删</button>
-        </div>`;
+        </div>${itemParams(j, it)}`;
       }
       if (it.type === "vector") {
         return `<div class="memitem">${move}
@@ -842,14 +847,14 @@ function renderEmappings() {
           <input type="text" value="${esc(JSON.stringify(it.vector ?? []))}" data-e="${i}" data-j="${j}" data-k="vector" placeholder="[1,0,0,0,0,0,0,0]" style="max-width:14rem">
           <span style="font-size:.75rem;color:hsl(var(--muted-foreground))">向量</span>
           <button class="btn btn-danger btn-sm" onclick="delEItem(${i},${j})">删</button>
-        </div>`;
+        </div>${itemParams(j, it)}`;
       }
       return `<div class="memitem">${move}
         <input type="text" value="${esc((it.triggers ?? []).join(","))}" data-e="${i}" data-j="${j}" data-k="triggers" placeholder="触发词（逗号分隔）" style="max-width:12rem">
         <input type="text" value="${esc(it.text ?? "")}" data-e="${i}" data-j="${j}" data-k="text" placeholder="文字情感描述，如 calm and composed" style="flex:1;min-width:12rem">
         <span style="font-size:.75rem;color:hsl(var(--muted-foreground))">文字</span>
         <button class="btn btn-danger btn-sm" onclick="delEItem(${i},${j})">删</button>
-      </div>`;
+      </div>${itemParams(j, it)}`;
     }).join("");
     return `<div class="membox">
       <div class="grouphead">
@@ -862,9 +867,16 @@ function renderEmappings() {
         <label class="f" style="flex-direction:row;align-items:center;gap:.375rem" title="未命中任何子条目时：勾选=用整个 instructions 作文字情感；不勾=无情感控制">
           <input type="checkbox" data-e="${i}" data-k="fallback_text" style="width:auto" ${e.fallback_text !== false ? "checked" : ""}> 未命中时用文字情感（整个 instructions）
         </label>
+        <label class="f" style="flex-direction:row;align-items:center;gap:.375rem" title="未命中子条目时：把向量映射页的启用条目追加在子条目之后等效处理（先于文字情感回退）">
+          <input type="checkbox" data-e="${i}" data-k="use_vector_map" style="width:auto" ${e.use_vector_map ? "checked" : ""}> 未命中时使用向量映射
+        </label>
         <button class="btn btn-secondary btn-sm" onclick="importGroupMembers(${i})" title="把绑定分组的成员（标签-音频）导入为音频子条目">导入分组成员</button>
         <button class="btn btn-danger btn-sm" onclick="delEmapping(${i})">删条目</button>
       </div>
+      <details class="memitem">
+        <summary style="cursor:pointer;font-size:.75rem;color:hsl(var(--muted-foreground))">参数覆盖 JSON（条目生效时应用；子条目 JSON 优先于此）</summary>
+        <textarea data-e="${i}" data-k="params_json" placeholder='{"emo_alpha":0.5,"speed":1.2}' style="min-height:3rem;font-size:.75rem">${esc(e.params_json ?? "")}</textarea>
+      </details>
       ${items || '<div style="font-size:.75rem;color:hsl(var(--muted-foreground))">暂无子条目。</div>'}
       <div class="memitem">
         <span style="font-size:.75rem;color:hsl(var(--muted-foreground))">加子条目：</span>
@@ -877,7 +889,7 @@ function renderEmappings() {
   wireEmappingInputs();
 }
 function wireEmappingInputs() {
-  document.querySelectorAll("#emapping-list input[data-e], #emapping-list select[data-e]").forEach((inp) => {
+  document.querySelectorAll("#emapping-list input[data-e], #emapping-list select[data-e], #emapping-list textarea[data-e]").forEach((inp) => {
     inp.onchange = () => {
       const i = +inp.dataset.e, j = inp.dataset.j;
       const e = emappings.entries[i];
@@ -885,6 +897,8 @@ function wireEmappingInputs() {
         const k = inp.dataset.k;
         if (k === "group") e.group = inp.value;
         else if (k === "fallback_text") e.fallback_text = inp.checked;
+        else if (k === "use_vector_map") e.use_vector_map = inp.checked;
+        else if (k === "params_json") e.params_json = inp.value.trim();
         return;
       }
       const it = e.items[+j], k = inp.dataset.k;
@@ -894,6 +908,7 @@ function wireEmappingInputs() {
       else if (k === "triggers") it.triggers = inp.value.split(/[,，]/).map((x) => x.trim()).filter(Boolean);
       else if (k === "vector") { try { it.vector = JSON.parse(inp.value); } catch { toast("向量不是合法 JSON", true); } }
       else if (k === "text") it.text = inp.value.trim();
+      else if (k === "params_json") it.params_json = inp.value.trim();
     };
   });
 }

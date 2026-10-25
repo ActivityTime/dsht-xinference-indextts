@@ -708,10 +708,52 @@ async def api_tts_adapter(request: Request):
                         if ap.is_file():
                             kwargs["emo_prompt_speech_b64"] = base64.b64encode(ap.read_bytes()).decode("ascii")
                             report["emotion"] = {"source": "emotion_map", "item": "audio", "audio": ap.name}
+            elif entry is not None and entry.get("use_vector_map"):
+                # 未命中子条目 → 向量映射页生效条目等效追加在子条目之后（先于文字情感回退）
+                vm_hit = None
+                for rule in _load_config("vectormap", {"rules": []}).get("rules", []):
+                    if rule.get("enabled") is False:
+                        continue
+                    for tw in rule.get("triggers", []):
+                        if tw and tw in search_text:
+                            vm_hit = (rule, tw)
+                            break
+                    if vm_hit is not None:
+                        break
+                if vm_hit is not None:
+                    kwargs["emo_vector"] = vm_hit[0].get("vector") or [0, 0, 0, 0, 0, 0, 0, 0]
+                    report["emotion"] = {"source": "vector_map_appended", "trigger": vm_hit[1]}
+                elif entry.get("fallback_text") and instructions:
+                    kwargs["use_emo_text"] = True
+                    kwargs["emo_text"] = instructions
+                    report["emotion"] = {"source": "fallback_text", "text": instructions[:60]}
             elif entry is not None and entry.get("fallback_text") and instructions:
                 kwargs["use_emo_text"] = True
                 kwargs["emo_text"] = instructions
                 report["emotion"] = {"source": "fallback_text", "text": instructions[:60]}
+        # 参数覆盖链（#[参数] 内联 > 子条目 JSON > 条目 JSON > 请求 kwargs；speed 落标准字段）
+        def _apply_param_json(raw):
+            if not raw:
+                return
+            try:
+                obj = json.loads(raw)
+            except json.JSONDecodeError:
+                report.setdefault("param_json_errors", []).append(raw[:60])
+                return
+            if not isinstance(obj, dict):
+                return
+            for k, v in obj.items():
+                if k in inline_params:
+                    continue  # 内联 #[参数] 保持最高级
+                if k == "speed":
+                    data["speed"] = str(v)
+                else:
+                    kwargs[k] = v
+
+        if entry is not None:
+            _apply_param_json(entry.get("params_json"))
+            if hit_item is not None:
+                _apply_param_json(hit_item.get("params_json"))
         data["input"] = (text.strip() or str(data.get("input") or "").strip())
         report["residual"] = data["input"]
         kwargs.setdefault("language", "ZH")
@@ -1144,10 +1186,13 @@ async def api_emappings_save(request: Request):
     for e in entries:
         e["group"] = str(e.get("group", "")).strip()
         e["fallback_text"] = e.get("fallback_text") is not False
+        e["use_vector_map"] = e.get("use_vector_map") is True
+        e["params_json"] = str(e.get("params_json", "") or "").strip()
         items = e.get("items", [])
         for it in items:
             if it.get("type") not in ("audio", "vector", "text"):
                 it["type"] = "audio"
+            it["params_json"] = str(it.get("params_json", "") or "").strip()
             if it["type"] == "audio":
                 it["label"] = str(it.get("label", "")).strip()
                 it["replace_default"] = it.get("replace_default") is True
