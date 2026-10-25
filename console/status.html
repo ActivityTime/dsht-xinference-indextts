@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>语音服务状态</title>
+<style>
+  :root { --bg:#0f1419; --card:#1a2129; --line:#2a3340; --txt:#e6edf3; --dim:#8b98a5;
+          --green:#2ecc71; --red:#e74c3c; --amber:#f1c40f; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+         font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+         display:flex; flex-direction:column; align-items:center; padding:32px 16px; min-height:100vh; }
+  h1 { font-size:22px; font-weight:600; margin:0 0 4px; }
+  .sub { color:var(--dim); font-size:13px; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:repeat(3,minmax(150px,1fr)); gap:16px;
+          width:100%; max-width:680px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px;
+          padding:20px 16px; text-align:center; }
+  .dot { width:46px; height:46px; border-radius:50%; margin:0 auto 12px;
+         box-shadow:0 0 0 0 rgba(0,0,0,0); transition:.3s; }
+  .dot.on { background:var(--green); box-shadow:0 0 22px 2px rgba(46,204,113,.55); }
+  .dot.off { background:var(--red); box-shadow:0 0 22px 2px rgba(231,76,60,.5); }
+  .label { font-size:14px; color:var(--dim); margin-bottom:6px; }
+  .state { font-size:16px; font-weight:600; }
+  .gpu-wrap { width:100%; max-width:680px; margin-top:22px; background:var(--card);
+              border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
+  .gpu-top { display:flex; justify-content:space-between; font-size:13px; color:var(--dim); margin-bottom:8px; }
+  .bar { height:10px; background:#0c1116; border-radius:6px; overflow:hidden; }
+  .bar > i { display:block; height:100%; background:linear-gradient(90deg,#2ecc71,#f1c40f,#e74c3c);
+             width:0; transition:.4s; }
+  .meta { width:100%; max-width:680px; margin-top:16px; font-size:12px; color:var(--dim);
+          display:flex; justify-content:space-between; }
+  .hint { width:100%; max-width:680px; margin-top:14px; font-size:12px; color:var(--dim);
+          border-left:3px solid var(--line); padding:8px 12px; line-height:1.6; }
+  @media (max-width:560px){ .grid{ grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+  <h1>Xinference 语音服务 · 存活状态</h1>
+  <div class="sub">独立监控提供 · 控制台死也能看本页</div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="dot" id="d-xinf"></div>
+      <div class="label">Xinference 服务 (9997)</div>
+      <div class="state" id="s-xinf">检测中…</div>
+    </div>
+    <div class="card">
+      <div class="dot" id="d-model"></div>
+      <div class="label">IndexTTS-2.5 模型</div>
+      <div class="state" id="s-model">检测中…</div>
+    </div>
+    <div class="card">
+      <div class="dot" id="d-console"></div>
+      <div class="label">Web 控制台 (9998)</div>
+      <div class="state" id="s-console">检测中…</div>
+    </div>
+  </div>
+
+  <div class="gpu-wrap">
+    <div class="gpu-top"><span>GPU 占用</span><span id="gpu-txt">—</span></div>
+    <div class="bar"><i id="gpu-bar"></i></div>
+  </div>
+
+  <div class="meta">
+    <span id="updated">更新时间: —</span>
+    <span>自动刷新 3s</span>
+  </div>
+
+  <div class="hint">
+    判读：三灯全绿 = 一切正常。控制台灯红但本页能打开 = 控制台已死、监控仍在看守（会自动拉起）。
+    连本页都打不开 = 监控进程也挂了（看 STATUS.txt 的更新时间判断是否很久没动）。
+  </div>
+
+<script>
+function paint(id, ok){
+  var el = document.getElementById(id);
+  el.className = "dot " + (ok ? "on" : "off");
+}
+function setText(id, t){ document.getElementById(id).textContent = t; }
+
+function refresh(){
+  fetch("/api/health", {cache:"no-store"})
+    .then(function(r){ return r.json(); })
+    .then(function(s){
+      var xinf = !!s.xinf, model = !!s.model, consoleUp = !!s.console;
+      paint("d-xinf", xinf);   setText("s-xinf",   xinf ? "运行中" : "已停止");
+      paint("d-model", model); setText("s-model", model ? "已加载" : "未加载/异常");
+      paint("d-console", consoleUp); setText("s-console", consoleUp ? "运行中" : "已停止");
+      var gpu = s.gpu || "";
+      setText("gpu-txt", gpu || "—");
+      if(gpu){
+        var m = gpu.match(/([\d.]+)\/([\d.]+)/);
+        document.getElementById("gpu-bar").style.width = (m ? Math.min(100, m[1]/m[2]*100) : 0) + "%";
+      } else {
+        document.getElementById("gpu-bar").style.width = "0%";
+      }
+      var ts = s.ts ? new Date(s.ts*1000) : null;
+      setText("updated", "更新时间: " + (ts ? ts.toLocaleString() : "—"));
+      var allOk = xinf && model && consoleUp;
+      document.title = (allOk ? "✅ 语音服务正常" : "🔴 服务异常")
+                      + " · " + (xinf?"服✓":"服✗") + (model?"模✓":"模✗") + (consoleUp?"台✓":"台✗");
+    })
+    .catch(function(){
+      paint("d-xinf","off"); setText("s-xinf","监控不可达");
+      paint("d-model","off"); setText("s-model","监控不可达");
+      paint("d-console","off"); setText("s-console","监控不可达");
+      setText("updated","监控进程可能已死（看 STATUS.txt）");
+      document.title = "🔴 监控不可达";
+    });
+}
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

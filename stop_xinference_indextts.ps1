@@ -84,3 +84,25 @@ for ($i = 0; $i -lt 10; $i++) {
     Start-Sleep -Seconds 1
 }
 Log("[*] 关停完成。9997 监听: $(if ($ok) {'已释放'} else {'仍占用，请检查日志'})")
+
+# ---- 5) 写 STATUS.txt 为已停止（避免用户看到过期绿灯，误以为仍在运行）----
+$statusFile = Join-Path $Script:BaseDir 'STATUS.txt'
+$ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+$lines = @(
+    "Xinference 本地语音服务 · 存活状态（独立监控写入，不依赖控制台）",
+    "更新时间: $ts",
+    "──────────────────────────────────",
+    "Xinference 服务 (9997): 🔴 已停止（由 stop 脚本确认）",
+    "IndexTTS-2.5 模型:     🔴 已停止",
+    "Web 控制台 (9998):     🔴 已停止",
+    "GPU 占用:              —",
+    "",
+    "状态页（独立于控制台）: http://127.0.0.1:9996/status",
+    "服务已被 stop 脚本关停；如需恢复请运行 start_xinference_indextts.ps1"
+)
+try {
+    Set-Content -LiteralPath $statusFile -Value $lines -Encoding UTF8
+    Log("[*] 已更新 STATUS.txt 为已停止")
+} catch {
+    Log("[!] 写 STATUS.txt 失败: $_")
+}

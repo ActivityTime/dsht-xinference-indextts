@@ -26,6 +26,9 @@ import argparse
 import traceback
 
 import psutil
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # ---------------- 配置（从环境变量读，无绝对路径）----------------
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -253,6 +256,120 @@ def ensure_console():
         log("启动控制台失败: %s" % e)
 
 
+# ---------------- 独立状态感知（#68：感知层独立于控制台，控制台死也能看）----------------
+LAST_STATE = {}
+
+
+def get_status_json():
+    try:
+        import urllib.request
+        req = urllib.request.Request(ENDPOINT + "/status", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def get_model_names():
+    try:
+        import urllib.request
+        req = urllib.request.Request(ENDPOINT + "/v1/models", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        return [m.get("model_name") or m.get("id") for m in data.get("data", [])]
+    except Exception:
+        return None
+
+
+def probe_state():
+    """聚合三路存活（本函数完全不依赖控制台 9998，控制台死也如实标红）。"""
+    xinf = service_ready()
+    names = get_model_names()
+    model = bool(names) and any(n in (MODEL, "IndexTTS2") for n in (names or []))
+    console = console_ready()
+    gpu = ""
+    st = get_status_json()
+    if st:
+        workers = st.get("workers") or {}
+        if workers:
+            first = next(iter(workers.values()))
+            g = (first.get("status") or {}).get("gpu-0") or {}
+            if g:
+                gpu = "%.1f/%.1f GB" % (g.get("mem_used", 0) / 1073741824,
+                                         g.get("mem_total", 0) / 1073741824)
+    return {"xinf": xinf, "model": model, "console": console, "gpu": gpu,
+            "ts": int(time.time()), "endpoint": ENDPOINT, "model_name": MODEL}
+
+
+def write_status_file(state):
+    """把聚合状态落到项目根 STATUS.txt（K: 真实盘，用户文件管理器必见）。"""
+    path = os.path.join(BASE_DIR, "STATUS.txt")
+    sym = lambda b: "🟢" if b else "🔴"
+    t = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(state["ts"]))
+    lines = [
+        "Xinference 本地语音服务 · 存活状态（独立监控写入，不依赖控制台）",
+        "更新时间: %s" % t,
+        "──────────────────────────────────",
+        "Xinference 服务 (9997): %s %s" % (sym(state["xinf"]), "运行中" if state["xinf"] else "已停止"),
+        "IndexTTS-2.5 模型:     %s %s" % (sym(state["model"]), "已加载" if state["model"] else "未加载/异常"),
+        "Web 控制台 (9998):     %s %s" % (sym(state["console"]), "运行中" if state["console"] else "已停止（状态页/本文件仍由独立监控提供）"),
+        "GPU 占用:              %s" % (state["gpu"] or "—"),
+        "",
+        "状态页（独立于控制台，控制台死也能看）: http://127.0.0.1:9996/status",
+        "判读：控制台红灯但状态页可访问 => 控制台已死，监控仍在看守；状态页也打不开 => 监控已死（看上方更新时间）",
+    ]
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception:
+        pass
+
+
+# 独立微型状态 HTTP 服务（端口 9996，标准库零依赖，独立于 9998 控制台）
+HEALTH_PORT = int(os.environ.get("MONITOR_STATUS_PORT", "9996"))
+STATUS_HTML_PATH = os.path.join(BASE_DIR, "console", "status.html")
+
+
+class _StatusHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path.startswith("/api/health"):
+            try:
+                body = json.dumps(LAST_STATE, ensure_ascii=False).encode("utf-8")
+            except Exception:
+                body = b"{}"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path.startswith("/status") or self.path == "/":
+            try:
+                html = open(STATUS_HTML_PATH, "rb").read()
+            except Exception:
+                html = b"<h1>status.html missing</h1>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(html)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+def start_status_server():
+    try:
+        srv = ThreadingHTTPServer(("127.0.0.1", HEALTH_PORT), _StatusHandler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        log("独立状态页服务已启动: http://127.0.0.1:%d/status（独立于 9998 控制台）" % HEALTH_PORT)
+    except Exception as e:
+        log("状态页服务启动失败（端口 %d 可能被占）: %s" % (HEALTH_PORT, e))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--once", action="store_true", help="只检查一轮")
@@ -265,16 +382,23 @@ def main():
         sys.exit(0)
     log("IndexTTS 守护监控启动 ENDPOINT=%s PID=%s" % (ENDPOINT, os.getpid()))
 
+    start_status_server()  # 独立状态页（9996），先于主循环启动
+
     if args.once:
         check_service_singleton()
         ensure_service_and_model()
         ensure_console()
+        LAST_STATE.update(probe_state())
+        write_status_file(LAST_STATE)
     else:
         while True:
             try:
                 check_service_singleton()
                 ensure_service_and_model()
                 ensure_console()
+                LAST_STATE.clear()
+                LAST_STATE.update(probe_state())
+                write_status_file(LAST_STATE)
             except Exception as e:
                 log("监控循环异常: %s" % traceback.format_exc())
             time.sleep(args.interval)

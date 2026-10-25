@@ -62,6 +62,7 @@ class StatusWindow:
     def __init__(self, root):
         self.root = root
         self._stop = False
+        root.attributes("-topmost", True)  # 始终置顶，避免被遮挡（容器 GUI 不可见时本窗口无意义，仅宿主直跑时生效）
         root.title("Xinference 语音服务 · 存活状态")
         root.geometry("440x320")
         root.resizable(False, False)

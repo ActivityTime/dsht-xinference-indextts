@@ -47,3 +47,6 @@ console/adapter_defaults.json
 console/vector_map.json
 console/emotion_mappings.json
 config.local.ps1
+
+# 运行时生成物
+STATUS.txt

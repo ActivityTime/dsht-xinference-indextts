@@ -37,6 +37,7 @@ HISTORY_DIR = CONSOLE_DIR / "history"
 CACHE_DIR = CONSOLE_DIR / "cache"
 LIB_FILE = CONSOLE_DIR / "library.json"
 LOG_FILE = CONSOLE_DIR / "console.log"
+STATUS_HTML = CONSOLE_DIR / "status.html"
 
 XINFERENCE_ENDPOINT = os.environ.get("XINFERENCE_ENDPOINT", "http://127.0.0.1:9997").rstrip("/")
 MODEL_NAME = os.environ.get("MODEL_NAME", "IndexTTS-2.5")
@@ -100,6 +101,45 @@ def api_status():
     except Exception:  # noqa: BLE001
         out["models"] = {}
     return out
+
+
+@app.get("/api/health")
+def api_health():
+    """三路存活聚合（供 /status 状态页轮询）；与独立监控 9996 端点同结构。
+    本接口由控制台自身提供，故 console 恒为真；控制台若死则本接口也无，
+    此时应访问独立监控的 http://127.0.0.1:9996/status。"""
+    try:
+        base = requests.get(XINFERENCE_ENDPOINT + "/status", timeout=5).json()
+    except Exception:  # noqa: BLE001
+        base = None
+    xinf = base is not None
+    try:
+        models = requests.get(XINFERENCE_ENDPOINT + "/v1/models", timeout=5).json()
+    except Exception:  # noqa: BLE001
+        models = None
+    model_loaded = bool(models) and any(
+        (m.get("model_name") in ("IndexTTS-2.5", "IndexTTS2") or m.get("id") == "IndexTTS-2.5")
+        for m in models.get("data", [])) if models else False
+    gpu = ""
+    if base:
+        workers = base.get("workers") or {}
+        if workers:
+            first = next(iter(workers.values()))
+            g = (first.get("status") or {}).get("gpu-0") or {}
+            if g:
+                gpu = "%.1f/%.1f GB" % (g.get("mem_used", 0) / 1073741824,
+                                         g.get("mem_total", 0) / 1073741824)
+    return {
+        "xinf": xinf, "model": model_loaded, "console": True,
+        "gpu": gpu, "ts": int(time.time()),
+        "endpoint": XINFERENCE_ENDPOINT, "model_name": MODEL_NAME,
+    }
+
+
+@app.get("/status")
+def status_page():
+    return FileResponse(STATUS_HTML, media_type="text/html; charset=utf-8",
+                        headers={"cache-control": "no-cache"})
 
 
 # ────────────────────────── 合成代理（缓存 + 归档 + 日志） ──────────────────────────
