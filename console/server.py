@@ -261,6 +261,48 @@ DSH_INSTRUCTION_RE = re.compile(
     r"(?:(?:说|讲|念|朗读|读)\s*)?(?:这?句话?|这句话|这句|话)?\s*[。.！!？?]?\s*")
 
 
+def _resolve_lib_root(roots, ref):
+    """库源引用解析：优先按名（root_name，抗重排）；回退旧 int 索引。
+    返回 (root_dict, degraded)；解析失败 (None, reason)。"""
+    if isinstance(ref, str) and ref:
+        for r in roots:
+            if r.get("name") == ref:
+                return r, None
+        return None, f"库源名不存在: {ref}"
+    try:
+        ri = int(ref)
+    except (TypeError, ValueError):
+        return None, f"非法库源引用: {ref!r}"
+    if 0 <= ri < len(roots):
+        return roots[ri], "索引引用（旧格式，重排库源会失效，保存后自动迁移为库名）"
+    return None, f"库源索引越界: {ref}"
+
+
+def _audio_ref_path(item, roots):
+    """条目音频引用 → (Path, note)。note 记录降级/失效原因，正常为 None。"""
+    ref = item.get("root_name", item.get("root", 0))
+    root, note = _resolve_lib_root(roots, ref)
+    if root is None:
+        return None, note
+    rel = str(item.get("rel", ""))
+    path = Path(root["path"]) / rel
+    if not path.is_file():
+        return None, f"文件不存在: {root['name']}::{rel}"
+    return path, note
+
+
+def _migrate_audio_ref(item):
+    """旧格式 root(int 索引) → root_name(库名)；已有 root_name 或索引失效则原样。"""
+    if item.get("root_name") or "root" not in item:
+        item.pop("root", None)
+        return item
+    root, _ = _resolve_lib_root(_load_library(), item.get("root"))
+    if root is not None:
+        item["root_name"] = root["name"]
+    item.pop("root", None)
+    return item
+
+
 def rules_for_adapter():
     # #49：情绪映射「通用拦截」已停用（各模式不再自动匹配正文/voice 短语注入情感），
     # 等待重新设计。映射页与 /api/emotions 端点保留可编辑，仅适配层不再消费。
@@ -410,13 +452,11 @@ async def api_tts_adapter(request: Request):
                    if seg.strip() and seg.strip() != "default"]
 
     def _member_audio(mm):
-        roots = _load_library()
-        ri = int(mm.get("root", 0))
-        if 0 <= ri < len(roots):
-            path = Path(roots[ri]["path"]) / str(mm.get("rel", ""))
-            if path.is_file():
-                return path
-        return None
+        path, note = _audio_ref_path(mm, _load_library())
+        if note:
+            report.setdefault("broken_refs", []).append(
+                {"ref": f"{mm.get('root_name', mm.get('root'))}|{mm.get('rel')}", "note": note})
+        return path
 
     def _group_from(segments_text):
         """「分组名 ⊆ 段」匹配，段内候选取最长名；返回 (group, consumed_segs)。"""
@@ -682,7 +722,8 @@ async def api_tts_adapter(request: Request):
         # 音色：分组默认成员；音频子条目命中且勾选「替换默认音色」→ 该音频替换 prompt
         chosen = default_member
         if hit_item is not None and hit_item.get("type") == "audio" and hit_item.get("replace_default"):
-            chosen = {"label": hit_item.get("label", ""), "root": hit_item.get("root", 0), "rel": hit_item.get("rel", "")}
+            chosen = {"label": hit_item.get("label", ""), "rel": hit_item.get("rel", ""),
+                      **({"root_name": hit_item["root_name"]} if hit_item.get("root_name") else {"root": hit_item.get("root", 0)})}
         if chosen is not None and not explicit_ref:
             path = _member_audio(chosen)
             if path is not None:
@@ -701,13 +742,13 @@ async def api_tts_adapter(request: Request):
                     kwargs["emo_text"] = hit_item.get("text", "")
                     report["emotion"] = {"source": "emotion_map", "item": "text"}
                 elif t == "audio":
-                    roots = _load_library()
-                    ri = int(hit_item.get("root", 0))
-                    if 0 <= ri < len(roots):
-                        ap = Path(roots[ri]["path"]) / str(hit_item.get("rel", ""))
-                        if ap.is_file():
-                            kwargs["emo_prompt_speech_b64"] = base64.b64encode(ap.read_bytes()).decode("ascii")
-                            report["emotion"] = {"source": "emotion_map", "item": "audio", "audio": ap.name}
+                    ap, note = _audio_ref_path(hit_item, _load_library())
+                    if note:
+                        report.setdefault("broken_refs", []).append(
+                            {"ref": f"{hit_item.get('root_name', hit_item.get('root'))}|{hit_item.get('rel')}", "note": note})
+                    if ap is not None:
+                        kwargs["emo_prompt_speech_b64"] = base64.b64encode(ap.read_bytes()).decode("ascii")
+                        report["emotion"] = {"source": "emotion_map", "item": "audio", "audio": ap.name}
             elif entry is not None and entry.get("use_vector_map"):
                 # 未命中子条目 → 向量映射页生效条目等效追加在子条目之后（先于文字情感回退）
                 vm_hit = None
@@ -993,6 +1034,7 @@ def api_reflib():
                 sub = Path(rel).parent.as_posix()
                 items.append({
                     "root": idx,
+                    "rootName": r["name"],
                     "rel": rel,
                     "group": f"{r['name']}/{sub}" if sub != "." else r["name"],
                     "name": p.name,
@@ -1174,6 +1216,31 @@ async def api_vectormap_save(request: Request):
     return value
 
 
+@app.get("/api/refs/health")
+def api_refs_health():
+    """引用体检：扫音色分组成员 + 情绪映射音频子条目的库引用，列失效/降级项。"""
+    roots = _load_library()
+    problems = []
+
+    def check(item, where):
+        if not item.get("rel"):
+            return
+        path, note = _audio_ref_path(item, roots)
+        if note:
+            problems.append({"where": where, "label": item.get("label", ""),
+                             "ref": f"{item.get('root_name', item.get('root'))}|{item.get('rel')}",
+                             "note": note})
+
+    for g in _load_config("groups", {"groups": []}).get("groups", []):
+        for m in g.get("members", []):
+            check(m, f"音色分组/{g.get('name', '?')}")
+    for e in _load_config("emappings", {"entries": []}).get("entries", []):
+        for it in e.get("items", []):
+            if it.get("type") == "audio":
+                check(it, f"情绪映射/{e.get('group', '?')}")
+    return {"total_roots": len(roots), "problems": problems}
+
+
 @app.get("/api/emappings")
 def api_emappings_get():
     return _load_config("emappings", {"entries": []})
@@ -1196,6 +1263,8 @@ async def api_emappings_save(request: Request):
             if it["type"] == "audio":
                 it["label"] = str(it.get("label", "")).strip()
                 it["replace_default"] = it.get("replace_default") is True
+                it["rel"] = str(it.get("rel", "")).strip()
+                _migrate_audio_ref(it)
             else:
                 it["triggers"] = [t.strip() for t in it.get("triggers", []) if str(t).strip()]
                 if it["type"] == "vector":
@@ -1223,8 +1292,8 @@ async def api_groups_save(request: Request):
         g["name"] = str(g.get("name", "")).strip()
         for m in g.get("members", []):
             m["label"] = str(m.get("label", "")).strip()
-            m["root"] = int(m.get("root", 0))
             m["rel"] = str(m.get("rel", "")).strip()
+            _migrate_audio_ref(m)
     value = {"groups": groups}
     _save_config("groups", value)
     return value

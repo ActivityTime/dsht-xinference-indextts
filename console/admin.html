@@ -381,8 +381,10 @@ textarea{resize:vertical;min-height:6rem}
         <div class="row" style="margin-bottom:.75rem">
           <button class="btn btn-secondary" onclick="loadEmappings()">刷新</button>
           <button class="btn btn-secondary" onclick="addEmapping()">加一个条目</button>
+          <button class="btn btn-secondary" onclick="refsHealth()">引用体检</button>
           <button class="btn btn-primary" style="margin-left:auto" onclick="saveEmappings()">保存全部</button>
         </div>
+        <div class="log" id="refs-health" style="display:none;margin-bottom:.75rem"></div>
         <div id="emapping-list">加载中…</div>
       </div>
     </section>
@@ -947,6 +949,20 @@ function importGroupMembers(i) {
   renderEmappings();
   toast(`已导入 ${added} 个分组成员为音频子条目`);
 }
+async function refsHealth() {
+  const box = $("refs-health");
+  try {
+    const r = await (await fetch("/api/refs/health")).json();
+    box.style.display = "";
+    if (!(r.problems ?? []).length) {
+      box.textContent = `引用体检通过：库源 ${r.total_roots} 个，音色分组与情绪映射的音频引用全部有效。`;
+    } else {
+      box.textContent = "引用体检发现 " + r.problems.length + " 个失效/降级引用：" + "\n" +
+        r.problems.map((x) => `- [${x.where}] ${x.label || "(无标签)"} :: ${x.note}`).join("\n");
+    }
+  } catch { toast("体检请求失败", true); }
+}
+
 async function saveEmappings() {
   const r = await (await fetch("/api/emappings", { method: "POST",
     headers: { "content-type": "application/json" }, body: JSON.stringify(emappings) })).json();
@@ -1091,10 +1107,10 @@ function addGroupMember(gi) {
   const label = $(`mem-label-${gi}`).value.trim() || "未命名";
   const v = $(`mem-sel-${gi}`).value;
   if (!v) { toast("请选择音频", true); return; }
-  const [root, rel] = v.split("|");
+  const [rn, rel] = v.split("|");
   groups.groups[gi].members ??= [];
   const first = groups.groups[gi].members.length === 0;
-  groups.groups[gi].members.push({ label, root: +root, rel, is_default: first });
+  groups.groups[gi].members.push({ label, root_name: rn, rel, is_default: first });
   renderGroups();
 }
 function delGroupMember(gi, mi) { groups.groups[gi].members.splice(mi, 1); renderGroups(); }
