@@ -174,13 +174,51 @@ model_uid = client.launch_model(
 
 ---
 
-## 五、关键参数速查
+## 五、语言处理机制（language 参数完整语义）
+
+**核心：语言 token 引导单一多语言分词器**——不是按语言切换模型或分词器。全模型共用一套
+多语言 BPE 词表（`multilingual_zh_ja_yue_char_del.tiktoken`，Whisper 风格 99 语言），
+`language` 的硬作用是在**每段文本前拼语言 token 前缀**：`lang_prefix = '<|zh|> '` 等
+（词表内置全部 `<|语言码|>` 特殊 token，未知 lang 兜底映射 `common`）。
+
+`language` 的四个作用点（`infer_v2_5.py:729-742`）：
+
+| 作用 | 逻辑 |
+|---|---|
+| ① 语言 token 前缀 | 每段 tokenize 前拼 `<|zh|> ` 等；分段 token 预算含前缀 |
+| ② 文本规范化分派 | `zh/zhen/en` → 内置 ITN（数字/符号转读法，"3.14"→"三点一四"）；`ja/es` → NeMo 规范化；**其他语言不做规范化** |
+| ③ 大小写处理 | `ja/zh/zhen/en` → 转小写；`es` → 转大写；其他不动 |
+| ④ 发音标注/G2P | `<文字|发音>` 标注通用；`ja` 额外走 JapaneseG2P 假名处理 |
+
+**支持的值**：词表层 99 语言码均可拼 token；**官方实测保证中/英/日/西/阿**（README）；
+`zhen` = 中英混合（zh 规范化 + 接受中英混排）。
+
+**不传 language 的行为（三层兜底，恒等于 ZH）**：
+① 控制台适配层各分支 `kwargs.setdefault("language", ...)`（API 配置页 lang，默认 Auto）；
+② wrapper `indextts2.py:189-192`：language/lang 都缺省时默认 `"ZH"`；
+③ 结果 = 按 ZH 处理（`<|zh|>` 前缀 + 中文 ITN + 转小写）。
+
+**语言 Auto（控制台，#60）**：API 配置页语言选 Auto 时，按 **input 主体语言字数**检测——
+纯拉丁 → EN；假名占 CJK ≥1/4 → JA；其余 CJK → ZH（**中文兜底**）；空文本 → ZH。
+
+**实用推论**：
+1. **语言与音色/情绪完全解耦**——language 只作用于文本前端，参考音频决定音色；
+   "日语文本 + 中文角色参考音频"合法（该音色读日语）；
+2. **小语种风险在规范化**：语言 token 大概率能引导发音，但无 ITN——数字/符号/缩写按原样
+   进分词器，读错比"不支持"更常见。小语种建议正文自写全（数字转文字）再合成；
+3. **语种传错的症状是静默的**：日语文本按 ZH 处理不报错——假名仍能出声，但语言 token 错、
+   数字按中文读法、ja G2P 不走，只有听输出才能发现。DSHT 不发 language（经适配层默认），
+   日文台词需在分组条目参数 JSON 写 `{"language":"JA"}` 或内联 `#[参数][language=JA]`。
+
+---
+
+## 六、关键参数速查
 
 | 参数 | 类型 | 范围/取值 | 说明 |
 |---|---|---|---|
 | `input` | str | — | 待合成文本 |
 | `prompt_speech` | bytes | WAV 音频 | 参考音频（音色克隆必需） |
-| `language` | str | `ZH`/`EN`/`JA`/`ES`/`AR` | 输出语言 |
+| `language` | str | `ZH`/`EN`/`JA`/`ES`/`AR`/`ZHEN`（混）/`Auto`* | 输出语言（*Auto 为控制台适配层选项，按 input 检测；不传恒等于 ZH，见第五节） |
 | `speed` | float | 0.5–2.0 | OpenAI 语义，>1 加速 |
 | `duration_factor` | float | 0.5–2.0 | 上游语义，>1 变慢（与 speed 二选一） |
 | `emo_audio_prompt` | bytes | 音频 | 情感参考音频 |
@@ -190,21 +228,21 @@ model_uid = client.launch_model(
 | `emo_text` | str | — | 情感文本描述 |
 | `use_random` | bool | False/True | 随机情感 |
 | `use_bf16` | bool（加载时） | False/True | bf16 加载省显存 |
-| `use_qwen_emo` | bool（加载时） | False/True | 文本情感引导必需（增加显存） |
+| `use_qwen_emo` | bool（加载时） | False/True | 文本情感模型 QwenEmotion；本 fork 默认 False+首次请求惰性唤醒（#37，省 1.2-2.5G 显存功能不丢；上游原版才是必须加载时开） |
 
 ---
 
-## 六、注意事项
+## 七、注意事项
 
 1. **参考音频**：每次请求都必须提供（IndexTTS-2.5 是 zero-shot 克隆模型，没有预置音色）。
 2. **发音控制语法**：`<词|读音>`，如 `他在银<行|XING2>里<行|HANG2>走了半天。`——拼音大写字母+声调数字。
 3. **显存**：`use_bf16=true` 时空闲 ~8.3GB/10GB；开启 `use_qwen_emo` 会进一步增加，3080 10GB 请按需取舍。
 4. **Python 版本**：上游官方支持 Python 3.10/3.11（Xinference 已内置独立虚拟环境处理，无需自己装）。
-5. **情感能力**：真实情感控制使用独立输入（情感参考音频/向量/文本），与音色解耦；Xinference 的 IndexTTS-2.5 支持 `emo_audio_prompt`/`emo_vector`/`use_emo_text`（文本引导需 `use_qwen_emo=True` 加载）。
+5. **情感能力**：真实情感控制使用独立输入（情感参考音频/向量/文本），与音色解耦；Xinference 的 IndexTTS-2.5 支持 `emo_audio_prompt`/`emo_vector`/`use_emo_text`（本 fork 文本引导**无需**加载时开 `use_qwen_emo`——首个请求惰性唤醒，见 #37）。
 
 ---
 
-## 七、与相邻文档的关系
+## 八、与相邻文档的关系
 
 | 文档 | 主题 | 与本文档的关系 |
 |---|---|---|
