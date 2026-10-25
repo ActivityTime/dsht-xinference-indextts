@@ -52,7 +52,19 @@ $env:CONSOLE_PORT                    = $Script:ConsolePort
 #   config.local.ps1 内容示例：$Script:RefAudioLib = 'I:\SomeResources\VoiceClonePrompt-ForOmniVoice'
 $Script:RefAudioLib = ''
 $localCfg = Join-Path $Script:BaseDir 'config.local.ps1'
-if (Test-Path -LiteralPath $localCfg) { . $localCfg }
+if (Test-Path -LiteralPath $localCfg) {
+    . $localCfg
+} else {
+    # 自动生成模板（UTF-8 带 BOM——PS5.1 无 BOM 中文注释会被误读静默失效，#56/#59）：
+    # 部署即开箱可用；用户填好路径后无需重启——控制台音色库页可直接改（写入 library.json）。
+    $tpl = @(
+        '# 本机专属配置（git 忽略）。config.ps1 缺失时会自动重建本模板。',
+        '# 填参考音频库根目录后保存；也可不改这里，直接在控制台「参考音频库→库源配置」页填写。',
+        '$Script:RefAudioLib = '''''
+    ) -join [Environment]::NewLine
+    [IO.File]::WriteAllText($localCfg, $tpl + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding $true))
+    Write-Host '[i] 已生成 config.local.ps1 模板（本机路径配置，git 忽略）——首次部署请按需填写'
+}
 $env:REF_AUDIO_LIB                   = $Script:RefAudioLib
 
 # ---- External dependency list (explicit; runtime or usage-time resources) ----

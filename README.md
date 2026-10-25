@@ -77,8 +77,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\start_xinference_indextts.ps1
 git clone https://github.com/ActivityTime/dsht-xinference-indextts.git
 cd dsht-xinference-indextts
 
-# 2. 本机专属路径写入 config.local.ps1（git 忽略；UTF-8 带 BOM；示例见 config.ps1 注释）
-#    $Script:RefAudioLib = '<你的参考音频库绝对路径>'
+# 2. 首次启动会自动生成 config.local.ps1 模板（git 忽略；UTF-8 带 BOM）——
+#    在其中填 $Script:RefAudioLib = '<你的参考音频库绝对路径>'，或跳过本步、
+#    直接在控制台「参考音频库 → 库源配置」页填写（效果等价，写入 library.json）
 
 # 3. 一键重建下载区（停全部 Xinference 进程；联网；权重≈10.5GB + wheel≈2.6GB）
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\rebuild_downloads.ps1
